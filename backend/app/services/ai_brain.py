@@ -1,26 +1,26 @@
 """
 AI Brain — model routing, conversation handling, tool orchestration.
-Routes requests to Haiku/Sonnet/Opus based on task complexity.
+Routes requests to GPT-4o-mini/GPT-4o/GPT-4.1 based on task complexity.
 """
 
 import time
 import json
-import anthropic
 from enum import Enum
 from dataclasses import dataclass
+from openai import OpenAI
 from app.config import get_settings
 from app.services.usage_tracker import track_llm_usage
 
-_client: anthropic.Anthropic | None = None
+_client: OpenAI | None = None
 
 
-def get_anthropic() -> anthropic.Anthropic:
+def get_openai() -> OpenAI:
     global _client
     if _client is None:
         s = get_settings()
-        if not s.anthropic_api_key:
-            raise RuntimeError("ANTHROPIC_API_KEY not set")
-        _client = anthropic.Anthropic(api_key=s.anthropic_api_key)
+        if not s.openai_api_key:
+            raise RuntimeError("OPENAI_API_KEY not set")
+        _client = OpenAI(api_key=s.openai_api_key)
     return _client
 
 
@@ -58,17 +58,17 @@ def classify_complexity(message: str) -> ModelTier:
 def get_model_id(tier: ModelTier) -> str:
     s = get_settings()
     return {
-        ModelTier.FAST: s.claude_model_fast,
-        ModelTier.STANDARD: s.claude_model_standard,
-        ModelTier.PREMIUM: s.claude_model_premium,
+        ModelTier.FAST: s.openai_model_fast,
+        ModelTier.STANDARD: s.openai_model_standard,
+        ModelTier.PREMIUM: s.openai_model_premium,
     }[tier]
 
 
-# Pricing per million tokens (input, output) as of Oct 2026
+# Pricing per million tokens (input, output)
 MODEL_PRICING: dict[str, tuple[float, float]] = {
-    "claude-haiku-5-5": (0.10, 0.50),
-    "claude-sonnet-5-5": (2.00, 10.00),
-    "claude-opus-5-5": (4.00, 20.00),
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4o": (2.50, 10.00),
+    "gpt-4.1": (2.00, 8.00),
 }
 
 
@@ -92,8 +92,23 @@ def build_system_prompt(agent_prompt: str, memories: list[str] | None = None) ->
 
 
 def estimate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
-    prices = MODEL_PRICING.get(model, (2.0, 10.0))
+    prices = MODEL_PRICING.get(model, (2.50, 10.0))
     return (tokens_in * prices[0] + tokens_out * prices[1]) / 1_000_000
+
+
+def _convert_tools_for_openai(tools: list[dict]) -> list[dict]:
+    """Convert Anthropic-style tool defs to OpenAI function-calling format."""
+    openai_tools = []
+    for t in tools:
+        openai_tools.append({
+            "type": "function",
+            "function": {
+                "name": t["name"],
+                "description": t.get("description", ""),
+                "parameters": t.get("input_schema", {"type": "object", "properties": {}}),
+            },
+        })
+    return openai_tools
 
 
 async def chat(
@@ -109,49 +124,91 @@ async def chat(
         tier = classify_complexity(last_user if isinstance(last_user, str) else "")
 
     model = get_model_id(tier)
-    client = get_anthropic()
+    client = get_openai()
+
+    # OpenAI uses system as a message, not a parameter
+    openai_messages = [{"role": "system", "content": system_prompt}]
+
+    for m in messages:
+        role = m["role"]
+        content = m["content"]
+
+        if role == "user" and isinstance(content, list):
+            # Tool results from our tool loop
+            for item in content:
+                if item.get("type") == "tool_result":
+                    openai_messages.append({
+                        "role": "tool",
+                        "tool_call_id": item["tool_use_id"],
+                        "content": item.get("content", ""),
+                    })
+        elif role == "assistant" and isinstance(content, list):
+            # Assistant message with tool calls
+            text_parts = []
+            tc_list = []
+            for block in content:
+                if block.get("type") == "text":
+                    text_parts.append(block["text"])
+                elif block.get("type") == "tool_use":
+                    tc_list.append({
+                        "id": block["id"],
+                        "type": "function",
+                        "function": {
+                            "name": block["name"],
+                            "arguments": json.dumps(block["input"]),
+                        },
+                    })
+            msg: dict = {"role": "assistant", "content": "\n".join(text_parts) or None}
+            if tc_list:
+                msg["tool_calls"] = tc_list
+            openai_messages.append(msg)
+        else:
+            openai_messages.append({"role": role, "content": content if isinstance(content, str) else json.dumps(content)})
 
     kwargs: dict = {
         "model": model,
         "max_tokens": max_tokens,
-        "system": system_prompt,
-        "messages": messages,
+        "messages": openai_messages,
     }
     if tools:
-        kwargs["tools"] = tools
+        kwargs["tools"] = _convert_tools_for_openai(tools)
 
     start = time.monotonic()
-    response = client.messages.create(**kwargs)
+    response = client.chat.completions.create(**kwargs)
     elapsed_ms = int((time.monotonic() - start) * 1000)
 
-    text_parts = []
+    choice = response.choices[0]
+    text = choice.message.content or ""
     tool_calls = []
-    for block in response.content:
-        if block.type == "text":
-            text_parts.append(block.text)
-        elif block.type == "tool_use":
+
+    if choice.message.tool_calls:
+        for tc in choice.message.tool_calls:
+            try:
+                args = json.loads(tc.function.arguments)
+            except json.JSONDecodeError:
+                args = {}
             tool_calls.append({
-                "id": block.id,
-                "name": block.name,
-                "input": block.input,
+                "id": tc.id,
+                "name": tc.function.name,
+                "input": args,
             })
 
-    tokens_in = response.usage.input_tokens
-    tokens_out = response.usage.output_tokens
+    tokens_in = response.usage.prompt_tokens if response.usage else 0
+    tokens_out = response.usage.completion_tokens if response.usage else 0
     cost = estimate_cost(model, tokens_in, tokens_out)
 
     if org_id:
         await track_llm_usage(org_id, model, tokens_in, tokens_out, cost)
 
     return LLMResponse(
-        content="\n".join(text_parts),
+        content=text,
         model=model,
         tier=tier,
         tokens_in=tokens_in,
         tokens_out=tokens_out,
         estimated_cost_usd=cost,
         tool_calls=tool_calls or None,
-        stop_reason=response.stop_reason,
+        stop_reason=choice.finish_reason or "",
     )
 
 
@@ -164,7 +221,7 @@ async def chat_with_tools(
     tier: ModelTier | None = None,
     max_turns: int | None = None,
 ) -> LLMResponse:
-    """Run a tool loop: call Claude, execute tools, return final answer."""
+    """Run a tool loop: call OpenAI, execute tools, return final answer."""
     s = get_settings()
     max_turns = max_turns or s.max_tool_calls_per_turn
     all_tokens_in = 0
@@ -172,7 +229,7 @@ async def chat_with_tools(
     model = get_model_id(tier or ModelTier.FAST)
 
     current_messages = list(messages)
-    seen_tool_calls: set[str] = set()  # loop detection
+    seen_tool_calls: set[str] = set()
 
     for turn in range(max_turns):
         resp = await chat(
@@ -186,13 +243,13 @@ async def chat_with_tools(
         all_tokens_in += resp.tokens_in
         all_tokens_out += resp.tokens_out
 
-        if resp.stop_reason != "tool_use" or not resp.tool_calls:
+        if resp.stop_reason != "tool_calls" or not resp.tool_calls:
             resp.tokens_in = all_tokens_in
             resp.tokens_out = all_tokens_out
             resp.estimated_cost_usd = estimate_cost(model, all_tokens_in, all_tokens_out)
             return resp
 
-        # Build assistant message with all content blocks
+        # Build assistant message with tool calls (OpenAI format internally)
         assistant_content = []
         if resp.content:
             assistant_content.append({"type": "text", "text": resp.content})
@@ -236,7 +293,7 @@ async def chat_with_tools(
 
         current_messages.append({"role": "user", "content": tool_results})
 
-    # Hit max turns — ask for final answer
+    # Hit max turns
     current_messages.append({
         "role": "user",
         "content": "You've reached the maximum number of tool calls. Please provide your final answer now.",

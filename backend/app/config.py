@@ -7,10 +7,10 @@ class Settings(BaseSettings):
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
 
-    anthropic_api_key: str = ""
-    claude_model_fast: str = "claude-haiku-5-5"
-    claude_model_standard: str = "claude-sonnet-5-5"
-    claude_model_premium: str = "claude-opus-5-5"
+    openai_api_key: str = ""
+    openai_model_fast: str = "gpt-4o-mini"
+    openai_model_standard: str = "gpt-4o"
+    openai_model_premium: str = "gpt-4.1"
 
     deepgram_api_key: str = ""
 
@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     max_call_duration_seconds: int = 300
     daily_outbound_call_limit: int = 5
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 @lru_cache

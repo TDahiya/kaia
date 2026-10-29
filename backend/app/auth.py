@@ -13,7 +13,6 @@ async def get_current_user(request: Request) -> dict:
     token = auth_header[7:]
     s = get_settings()
 
-    # Verify with Supabase
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.get(
             f"{s.supabase_url}/auth/v1/user",
@@ -26,7 +25,6 @@ async def get_current_user(request: Request) -> dict:
     user_id = user_data.get("id")
     email = user_data.get("email")
 
-    # Get org_id from users table
     from app.database import get_supabase
     db = get_supabase()
     user_row = db.table("users").select("org_id, role").eq("id", user_id).execute()

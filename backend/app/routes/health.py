@@ -21,7 +21,7 @@ async def system_status(user: dict = Depends(get_current_user)):
 
     return {
         "supabase": check(s.supabase_url),
-        "anthropic": check(s.anthropic_api_key),
+        "openai": check(s.openai_api_key),
         "deepgram": check(s.deepgram_api_key),
         "google_oauth": check(s.google_client_id),
         "telnyx": check(s.telnyx_api_key),
@@ -30,9 +30,9 @@ async def system_status(user: dict = Depends(get_current_user)):
         "encryption": check(s.token_encryption_key),
         "weather": check(s.openweather_api_key),
         "models": {
-            "fast": s.claude_model_fast,
-            "standard": s.claude_model_standard,
-            "premium": s.claude_model_premium,
+            "fast": s.openai_model_fast,
+            "standard": s.openai_model_standard,
+            "premium": s.openai_model_premium,
         },
         "limits": {
             "monthly_spend_usd": s.monthly_spend_limit_usd,

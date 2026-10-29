@@ -11,7 +11,7 @@ async def track_llm_usage(
     db = get_supabase()
     db.table("usage_events").insert({
         "org_id": org_id,
-        "provider": "anthropic",
+        "provider": "openai",
         "event_type": "chat_completion",
         "quantity": tokens_in + tokens_out,
         "unit": "tokens",
