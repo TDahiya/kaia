@@ -1,0 +1,14 @@
+{$DOMAIN:localhost} {
+    # API and WebSocket traffic
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+    handle /ws/* {
+        reverse_proxy backend:8000
+    }
+
+    # Frontend
+    handle {
+        reverse_proxy frontend:3000
+    }
+}
