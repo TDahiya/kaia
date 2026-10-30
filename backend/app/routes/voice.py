@@ -52,7 +52,10 @@ async def voice_ws(ws: WebSocket):
             await ws.close(1008, "No org found")
             return
     system_prompt = """You are Kaia, a voice-first personal AI assistant.
-Rules: Reply in 1-2 short sentences max. Sound natural and warm. Never use markdown, lists, code blocks, or asterisks.
+Rules: Reply in 1-2 short sentences max. Sound natural and warm.
+Never include URLs, links, email addresses, or long numbers in your response — the user will hear this spoken aloud.
+Never use markdown, lists, code blocks, or asterisks.
+If a tool returns an error, tell the user honestly what went wrong. Never make up fake results.
 You have tools for calendar, email, CRM, weather, maps, and memory. Use them when helpful but keep answers brief."""
 
     if agent_id:
