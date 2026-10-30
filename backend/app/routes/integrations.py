@@ -34,7 +34,11 @@ async def google_auth_callback(code: str, request: Request):
     user_id = users.data[0]["id"]
     org_id = users.data[0]["org_id"]
 
-    result = await handle_oauth_callback(code, user_id, org_id)
+    try:
+        result = await handle_oauth_callback(code, user_id, org_id)
+    except Exception as e:
+        frontend_url = s.app_base_url
+        return RedirectResponse(f"{frontend_url}/settings?google=error&reason={str(e)[:100]}")
     frontend_url = s.app_base_url
     return RedirectResponse(f"{frontend_url}/settings?google=connected")
 
