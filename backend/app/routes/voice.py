@@ -40,15 +40,14 @@ async def voice_ws(ws: WebSocket):
         await ws.close(1008, "Missing auth")
         return
 
+    db = get_supabase()
+
     if not org_id:
         row = db.table("users").select("org_id").eq("id", user_id).execute()
         org_id = row.data[0]["org_id"] if row.data else None
         if not org_id:
             await ws.close(1008, "No org found")
             return
-
-    # Load agent system prompt and memories
-    db = get_supabase()
     system_prompt = """You are Kaia, a voice-first personal AI assistant. Keep responses concise and natural for speech.
 You have tools for calendar, email, CRM, weather, and memory. Use them when helpful.
 For voice: be brief, use natural language, avoid markdown or code blocks."""
