@@ -1,11 +1,12 @@
 """Google OAuth 2.0 — authorization code flow, token storage, refresh."""
 
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import Flow
 from app.config import get_settings
 from app.database import get_supabase
 from app.encryption import encrypt_token, decrypt_token
+import httpx
 
 SCOPES = [
     "https://www.googleapis.com/auth/calendar",
@@ -15,47 +16,46 @@ SCOPES = [
 ]
 
 
-def get_oauth_flow() -> Flow:
-    s = get_settings()
-    return Flow.from_client_config(
-        {
-            "web": {
-                "client_id": s.google_client_id,
-                "client_secret": s.google_client_secret,
-                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "redirect_uris": [s.google_redirect_uri],
-            }
-        },
-        scopes=SCOPES,
-        redirect_uri=s.google_redirect_uri,
-    )
-
-
 def get_authorization_url() -> str:
-    flow = get_oauth_flow()
-    url, _ = flow.authorization_url(
-        access_type="offline",
-        prompt="consent",
-        include_granted_scopes="true",
-    )
-    return url
+    s = get_settings()
+    params = urlencode({
+        "client_id": s.google_client_id,
+        "redirect_uri": s.google_redirect_uri,
+        "response_type": "code",
+        "scope": " ".join(SCOPES),
+        "access_type": "offline",
+        "prompt": "consent",
+        "include_granted_scopes": "true",
+    })
+    return f"https://accounts.google.com/o/oauth2/auth?{params}"
 
 
 async def handle_oauth_callback(code: str, user_id: str, org_id: str) -> dict:
-    flow = get_oauth_flow()
-    flow.fetch_token(code=code)
-    creds = flow.credentials
+    s = get_settings()
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post("https://oauth2.googleapis.com/token", data={
+            "code": code,
+            "client_id": s.google_client_id,
+            "client_secret": s.google_client_secret,
+            "redirect_uri": s.google_redirect_uri,
+            "grant_type": "authorization_code",
+        })
+    if resp.status_code != 200:
+        raise ValueError(f"Token exchange failed: {resp.text[:200]}")
+
+    tokens = resp.json()
+    access_token = tokens["access_token"]
+    refresh_token = tokens.get("refresh_token")
 
     db = get_supabase()
     db.table("integrations").upsert({
         "user_id": user_id,
         "org_id": org_id,
         "provider": "google",
-        "access_token_encrypted": encrypt_token(creds.token),
-        "refresh_token_encrypted": encrypt_token(creds.refresh_token) if creds.refresh_token else None,
-        "token_expiry": creds.expiry.isoformat() if creds.expiry else None,
-        "scopes": list(creds.scopes) if creds.scopes else SCOPES,
+        "access_token_encrypted": encrypt_token(access_token),
+        "refresh_token_encrypted": encrypt_token(refresh_token) if refresh_token else None,
+        "token_expiry": None,
+        "scopes": SCOPES,
         "status": "active",
     }, on_conflict="user_id,provider").execute()
 
