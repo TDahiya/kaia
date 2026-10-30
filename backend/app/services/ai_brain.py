@@ -7,11 +7,12 @@ import time
 import json
 from enum import Enum
 from dataclasses import dataclass
-from openai import OpenAI
+from openai import OpenAI, AsyncOpenAI
 from app.config import get_settings
 from app.services.usage_tracker import track_llm_usage
 
 _client: OpenAI | None = None
+_async_client: AsyncOpenAI | None = None
 
 
 def get_openai() -> OpenAI:
@@ -22,6 +23,16 @@ def get_openai() -> OpenAI:
             raise RuntimeError("OPENAI_API_KEY not set")
         _client = OpenAI(api_key=s.openai_api_key)
     return _client
+
+
+def get_async_openai() -> AsyncOpenAI:
+    global _async_client
+    if _async_client is None:
+        s = get_settings()
+        if not s.openai_api_key:
+            raise RuntimeError("OPENAI_API_KEY not set")
+        _async_client = AsyncOpenAI(api_key=s.openai_api_key)
+    return _async_client
 
 
 class ModelTier(str, Enum):

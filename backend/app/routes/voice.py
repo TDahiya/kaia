@@ -7,7 +7,7 @@ import base64
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.config import get_settings
 from app.database import get_supabase
-from app.services.ai_brain import chat_with_tools, build_system_prompt, ModelTier
+from app.services.ai_brain import chat_with_tools, build_system_prompt, ModelTier, get_async_openai, get_model_id, _convert_tools_for_openai
 from app.services.tool_registry import registry
 from app.services.usage_tracker import track_stt_usage, track_tts_usage
 import httpx
@@ -88,6 +88,126 @@ You have tools for calendar, email, CRM, weather, maps, and memory. Use them whe
     is_speaking = False
     current_tts_task: asyncio.Task | None = None
 
+    async def _tts_one(sentence: str) -> bytes | None:
+        """TTS a single sentence, return raw mp3 bytes."""
+        try:
+            async with httpx.AsyncClient(timeout=15) as http:
+                r = await http.post(
+                    "https://api.deepgram.com/v1/speak",
+                    params={"model": "aura-2-theia-en", "encoding": "mp3"},
+                    headers={"Authorization": f"Token {s.deepgram_api_key}", "Content-Type": "application/json"},
+                    json={"text": sentence},
+                )
+                return r.content if r.status_code == 200 else None
+        except Exception:
+            return None
+
+    async def _stream_and_speak(messages, prompt, tools_defs, tool_exec):
+        """Stream LLM → sentence queue → TTS concurrently. Returns reply text."""
+        client = get_async_openai()
+        model = get_model_id(ModelTier.FAST)
+        oai_tools = _convert_tools_for_openai(tools_defs) if tools_defs else None
+
+        oai_msgs: list[dict] = [{"role": "system", "content": prompt}]
+        for m in messages:
+            if isinstance(m.get("content"), str):
+                oai_msgs.append({"role": m["role"], "content": m["content"]})
+
+        sq: asyncio.Queue[str | None] = asyncio.Queue()
+        reply_parts: list[str] = []
+
+        async def tts_worker():
+            while True:
+                sentence = await sq.get()
+                if sentence is None:
+                    break
+                audio = await _tts_one(sentence)
+                if audio:
+                    await ws.send_json({"type": "audio", "data": base64.b64encode(audio).decode(), "format": "mp3"})
+
+        tts_task = asyncio.create_task(tts_worker())
+
+        try:
+            for _turn in range(5):
+                stream = await client.chat.completions.create(
+                    model=model, messages=oai_msgs, max_tokens=256,
+                    tools=oai_tools, stream=True,
+                )
+
+                text = ""
+                sbuf = ""
+                tc_map: dict[int, dict] = {}
+                finish = None
+
+                async for chunk in stream:
+                    c = chunk.choices[0] if chunk.choices else None
+                    if not c:
+                        continue
+                    if c.finish_reason:
+                        finish = c.finish_reason
+                    d = c.delta
+                    if d and d.content:
+                        text += d.content
+                        reply_parts.append(d.content)
+                        sbuf += d.content
+                        if re.search(r'[.!?]\s*$', sbuf):
+                            await sq.put(sbuf.strip())
+                            sbuf = ""
+                    if d and d.tool_calls:
+                        for tcd in d.tool_calls:
+                            idx = tcd.index
+                            if idx not in tc_map:
+                                tc_map[idx] = {"id": "", "name": "", "args": ""}
+                            if tcd.id:
+                                tc_map[idx]["id"] = tcd.id
+                            if tcd.function:
+                                if tcd.function.name:
+                                    tc_map[idx]["name"] = tcd.function.name
+                                if tcd.function.arguments:
+                                    tc_map[idx]["args"] += tcd.function.arguments
+
+                if sbuf.strip():
+                    await sq.put(sbuf.strip())
+
+                if finish != "tool_calls" or not tc_map:
+                    break
+
+                # Execute tool calls
+                asst_msg: dict = {"role": "assistant", "content": text or None, "tool_calls": [
+                    {"id": tc_map[i]["id"], "type": "function",
+                     "function": {"name": tc_map[i]["name"], "arguments": tc_map[i]["args"]}}
+                    for i in sorted(tc_map)
+                ]}
+                oai_msgs.append(asst_msg)
+
+                for i in sorted(tc_map):
+                    tc = tc_map[i]
+                    try:
+                        args = json.loads(tc["args"])
+                    except json.JSONDecodeError:
+                        args = {}
+                    try:
+                        result = await tool_exec(tc["name"], args)
+                        content = json.dumps(result) if not isinstance(result, str) else result
+                    except Exception as e:
+                        content = f"Error: {e}"
+                    oai_msgs.append({"role": "tool", "tool_call_id": tc["id"], "content": content})
+
+        except asyncio.CancelledError:
+            tts_task.cancel()
+            raise
+        finally:
+            await sq.put(None)
+            try:
+                await tts_task
+            except asyncio.CancelledError:
+                pass
+
+        full_reply = "".join(reply_parts)
+        await track_tts_usage(org_id, len(full_reply))
+        await ws.send_json({"type": "audio_done"})
+        return full_reply, model
+
     async def process_transcript(transcript: str, is_final: bool):
         nonlocal messages_history, current_tts_task
 
@@ -98,20 +218,16 @@ You have tools for calendar, email, CRM, weather, maps, and memory. Use them whe
 
         await ws.send_json({"type": "transcript_final", "text": transcript})
 
-        # Cancel any ongoing TTS
         if current_tts_task and not current_tts_task.done():
             current_tts_task.cancel()
             await ws.send_json({"type": "tts_cancelled"})
 
-        # Store user message
         db.table("messages").insert({
             "conversation_id": conversation_id,
             "role": "user", "content": transcript,
         }).execute()
 
         messages_history.append({"role": "user", "content": transcript})
-
-        # Keep only last 10 messages for voice context
         if len(messages_history) > 10:
             messages_history = messages_history[-10:]
 
@@ -123,85 +239,20 @@ You have tools for calendar, email, CRM, weather, maps, and memory. Use them whe
 
         await ws.send_json({"type": "thinking"})
 
-        resp = await chat_with_tools(
-            messages=messages_history,
-            system_prompt=full_prompt,
-            tools_definitions=registry.list_definitions(),
-            tool_executor=tool_executor,
-            org_id=org_id,
-            tier=ModelTier.FAST,
-        )
+        async def _run():
+            reply, model_used = await _stream_and_speak(
+                messages_history, full_prompt,
+                registry.list_definitions(), tool_executor,
+            )
+            messages_history.append({"role": "assistant", "content": reply})
+            db.table("messages").insert({
+                "conversation_id": conversation_id,
+                "role": "assistant", "content": reply,
+                "model_used": model_used,
+            }).execute()
+            await ws.send_json({"type": "response_text", "text": reply, "model": model_used})
 
-        reply = resp.content
-        messages_history.append({"role": "assistant", "content": reply})
-
-        db.table("messages").insert({
-            "conversation_id": conversation_id,
-            "role": "assistant", "content": reply,
-            "model_used": resp.model,
-            "tokens_in": resp.tokens_in, "tokens_out": resp.tokens_out,
-        }).execute()
-
-        await ws.send_json({
-            "type": "response_text",
-            "text": reply,
-            "model": resp.model,
-            "tokens_in": resp.tokens_in,
-            "tokens_out": resp.tokens_out,
-            "cost": resp.estimated_cost_usd,
-        })
-
-        # TTS: stream audio back
-        current_tts_task = asyncio.create_task(stream_tts(ws, reply, org_id, s))
-
-    def _split_sentences(text: str) -> list[str]:
-        """Split text into sentences, merging short fragments."""
-        parts = re.split(r'(?<=[.!?])\s+', text.strip())
-        merged: list[str] = []
-        buf = ""
-        for p in parts:
-            buf = f"{buf} {p}".strip() if buf else p
-            if len(buf) > 20:
-                merged.append(buf)
-                buf = ""
-        if buf:
-            if merged:
-                merged[-1] += " " + buf
-            else:
-                merged.append(buf)
-        return merged
-
-    async def stream_tts(ws: WebSocket, text: str, org_id: str, s):
-        """TTS each sentence separately — first audio arrives much sooner."""
-        try:
-            sentences = _split_sentences(text)
-            for sentence in sentences:
-                async with httpx.AsyncClient(timeout=15) as client:
-                    resp = await client.post(
-                        "https://api.deepgram.com/v1/speak",
-                        params={"model": "aura-2-theia-en", "encoding": "mp3"},
-                        headers={
-                            "Authorization": f"Token {s.deepgram_api_key}",
-                            "Content-Type": "application/json",
-                        },
-                        json={"text": sentence},
-                    )
-                    if resp.status_code == 200:
-                        audio_b64 = base64.b64encode(resp.content).decode()
-                        await ws.send_json({
-                            "type": "audio",
-                            "data": audio_b64,
-                            "format": "mp3",
-                        })
-            await track_tts_usage(org_id, len(text))
-            await ws.send_json({"type": "audio_done"})
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            try:
-                await ws.send_json({"type": "tts_error", "message": str(e)})
-            except Exception:
-                pass
+        current_tts_task = asyncio.create_task(_run())
 
     # Main loop: receive audio from client, forward to Deepgram
     try:
