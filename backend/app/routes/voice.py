@@ -135,7 +135,10 @@ You have tools for calendar, email, CRM, weather, maps, and memory. Use them whe
                     break
                 audio = await _tts_one(sentence)
                 if audio:
-                    await ws.send_json({"type": "audio", "data": base64.b64encode(audio).decode(), "format": "mp3"})
+                    try:
+                        await ws.send_json({"type": "audio", "data": base64.b64encode(audio).decode(), "format": "mp3"})
+                    except Exception:
+                        return
 
         tts_task = asyncio.create_task(tts_worker())
 
