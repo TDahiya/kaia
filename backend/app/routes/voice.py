@@ -4,6 +4,7 @@ import json
 import re
 import asyncio
 import base64
+import random
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.config import get_settings
 from app.database import get_supabase
@@ -80,13 +81,9 @@ You have tools for calendar, email, CRM, weather, maps, and memory. Use them whe
 
     await ws.send_json({"type": "ready", "conversation_id": conversation_id})
 
-    # Connect to Deepgram STT (streaming)
-    dg_url = "wss://api.deepgram.com/v1/listen"
-    dg_params = "?model=nova-3&language=en&smart_format=true&endpointing=700&interim_results=true&utterance_end_ms=2000"
-
-    messages_history: list[dict] = []
-    is_speaking = False
-    current_tts_task: asyncio.Task | None = None
+    # Pre-cache backchannel fillers in background (ready by the time user speaks)
+    _FILLERS = ["Mm-hmm.", "Yeah.", "Okay.", "Sure.", "Right."]
+    filler_cache: list[str] = []
 
     async def _tts_one(sentence: str) -> bytes | None:
         """TTS a single sentence, return raw mp3 bytes."""
@@ -101,6 +98,21 @@ You have tools for calendar, email, CRM, weather, maps, and memory. Use them whe
                 return r.content if r.status_code == 200 else None
         except Exception:
             return None
+
+    async def _cache_fillers():
+        for f in _FILLERS:
+            audio = await _tts_one(f)
+            if audio:
+                filler_cache.append(base64.b64encode(audio).decode())
+    asyncio.create_task(_cache_fillers())
+
+    # Connect to Deepgram STT (streaming)
+    dg_url = "wss://api.deepgram.com/v1/listen"
+    dg_params = "?model=nova-3&language=en&smart_format=true&endpointing=700&interim_results=true&utterance_end_ms=2000"
+
+    messages_history: list[dict] = []
+    is_speaking = False
+    current_tts_task: asyncio.Task | None = None
 
     async def _stream_and_speak(messages, prompt, tools_defs, tool_exec):
         """Stream LLM → sentence queue → TTS concurrently. Returns reply text."""
@@ -238,6 +250,10 @@ You have tools for calendar, email, CRM, weather, maps, and memory. Use them whe
             return await registry.execute(name, args, org_id=org_id, conversation_id=conversation_id)
 
         await ws.send_json({"type": "thinking"})
+
+        # Instant backchannel — play cached filler while LLM starts
+        if filler_cache:
+            await ws.send_json({"type": "audio", "data": random.choice(filler_cache), "format": "mp3"})
 
         async def _run():
             reply, model_used = await _stream_and_speak(
