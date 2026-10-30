@@ -31,6 +31,8 @@ export default function ChatPage() {
   const messagesEnd = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioQueueRef = useRef<string[]>([]);
+  const isPlayingRef = useRef(false);
 
   useEffect(() => {
     messagesEnd.current?.scrollIntoView({ behavior: "smooth" });
@@ -137,12 +139,14 @@ export default function ChatPage() {
           setVoiceStatus("Speaking...");
           break;
         case "audio":
-          playAudio(data.data);
+          queueAudio(data.data);
           break;
         case "audio_done":
           setVoiceStatus("Listening...");
           break;
         case "tts_cancelled":
+          audioQueueRef.current = [];
+          isPlayingRef.current = false;
           if (audioRef.current) {
             audioRef.current.pause();
             audioRef.current = null;
@@ -166,6 +170,8 @@ export default function ChatPage() {
   const stopVoice = () => {
     wsRef.current?.close();
     wsRef.current = null;
+    audioQueueRef.current = [];
+    isPlayingRef.current = false;
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
@@ -191,20 +197,33 @@ export default function ChatPage() {
     }
   };
 
-  const playAudio = (base64: string) => {
-    const bytes = atob(base64);
+  const playNextInQueue = useCallback(() => {
+    if (audioQueueRef.current.length === 0) {
+      isPlayingRef.current = false;
+      return;
+    }
+    isPlayingRef.current = true;
+    const b64 = audioQueueRef.current.shift()!;
+    const bytes = atob(b64);
     const arr = new Uint8Array(bytes.length);
     for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
     const blob = new Blob([arr], { type: "audio/mp3" });
     const url = URL.createObjectURL(blob);
-    if (audioRef.current) {
-      audioRef.current.pause();
-    }
     const audio = new Audio(url);
     audioRef.current = audio;
+    audio.onended = () => {
+      URL.revokeObjectURL(url);
+      playNextInQueue();
+    };
     audio.play();
-    audio.onended = () => URL.revokeObjectURL(url);
-  };
+  }, []);
+
+  const queueAudio = useCallback((base64: string) => {
+    audioQueueRef.current.push(base64);
+    if (!isPlayingRef.current) {
+      playNextInQueue();
+    }
+  }, [playNextInQueue]);
 
   const newConversation = () => {
     setMessages([]);

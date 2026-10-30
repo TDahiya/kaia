@@ -1,7 +1,9 @@
 """Voice WebSocket endpoint — real-time STT/TTS via Deepgram."""
 
 import json
+import re
 import asyncio
+import base64
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.config import get_settings
 from app.database import get_supabase
@@ -48,9 +50,9 @@ async def voice_ws(ws: WebSocket):
         if not org_id:
             await ws.close(1008, "No org found")
             return
-    system_prompt = """You are Kaia, a voice-first personal AI assistant. Keep responses concise and natural for speech.
-You have tools for calendar, email, CRM, weather, and memory. Use them when helpful.
-For voice: be brief, use natural language, avoid markdown or code blocks."""
+    system_prompt = """You are Kaia, a voice-first personal AI assistant.
+Rules: Reply in 1-2 short sentences max. Sound natural and warm. Never use markdown, lists, code blocks, or asterisks.
+You have tools for calendar, email, CRM, weather, maps, and memory. Use them when helpful but keep answers brief."""
 
     if agent_id:
         agent = db.table("agents").select("system_prompt").eq("id", agent_id).single().execute()
@@ -152,32 +154,54 @@ For voice: be brief, use natural language, avoid markdown or code blocks."""
         # TTS: stream audio back
         current_tts_task = asyncio.create_task(stream_tts(ws, reply, org_id, s))
 
+    def _split_sentences(text: str) -> list[str]:
+        """Split text into sentences, merging short fragments."""
+        parts = re.split(r'(?<=[.!?])\s+', text.strip())
+        merged: list[str] = []
+        buf = ""
+        for p in parts:
+            buf = f"{buf} {p}".strip() if buf else p
+            if len(buf) > 20:
+                merged.append(buf)
+                buf = ""
+        if buf:
+            if merged:
+                merged[-1] += " " + buf
+            else:
+                merged.append(buf)
+        return merged
+
     async def stream_tts(ws: WebSocket, text: str, org_id: str, s):
+        """TTS each sentence separately — first audio arrives much sooner."""
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(
-                    "https://api.deepgram.com/v1/speak",
-                    params={"model": "aura-2-theia-en", "encoding": "mp3"},
-                    headers={
-                        "Authorization": f"Token {s.deepgram_api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={"text": text},
-                )
-                if resp.status_code == 200:
-                    import base64
-                    audio_b64 = base64.b64encode(resp.content).decode()
-                    await ws.send_json({
-                        "type": "audio",
-                        "data": audio_b64,
-                        "format": "mp3",
-                    })
-                    await track_tts_usage(org_id, len(text))
-                    await ws.send_json({"type": "audio_done"})
+            sentences = _split_sentences(text)
+            for sentence in sentences:
+                async with httpx.AsyncClient(timeout=15) as client:
+                    resp = await client.post(
+                        "https://api.deepgram.com/v1/speak",
+                        params={"model": "aura-2-theia-en", "encoding": "mp3"},
+                        headers={
+                            "Authorization": f"Token {s.deepgram_api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={"text": sentence},
+                    )
+                    if resp.status_code == 200:
+                        audio_b64 = base64.b64encode(resp.content).decode()
+                        await ws.send_json({
+                            "type": "audio",
+                            "data": audio_b64,
+                            "format": "mp3",
+                        })
+            await track_tts_usage(org_id, len(text))
+            await ws.send_json({"type": "audio_done"})
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            await ws.send_json({"type": "tts_error", "message": str(e)})
+            try:
+                await ws.send_json({"type": "tts_error", "message": str(e)})
+            except Exception:
+                pass
 
     # Main loop: receive audio from client, forward to Deepgram
     try:
