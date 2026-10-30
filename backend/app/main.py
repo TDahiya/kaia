@@ -13,6 +13,7 @@ import app.services.tools.google_calendar  # noqa: F401
 import app.services.tools.google_gmail  # noqa: F401
 import app.services.tools.google_sheets_crm  # noqa: F401
 import app.services.tools.phone_tools  # noqa: F401
+import app.services.tools.google_maps  # noqa: F401
 
 from app.routes import chat, agents, integrations, usage, memories, voice, telephony, health
 

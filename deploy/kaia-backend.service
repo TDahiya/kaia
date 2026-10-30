@@ -1,0 +1,15 @@
+[Unit]
+Description=Kaia AI Backend
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/kaia/backend
+EnvironmentFile=/opt/kaia/backend/.env
+ExecStart=/opt/kaia/backend/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -26,9 +26,9 @@ export default function PhonePage() {
           {phoneData ? (
             <div className="space-y-3 text-sm">
               <div className="flex justify-between">
-                <span className="text-muted">Telnyx Status</span>
-                <span className={phoneData.telnyx_configured ? "text-green-400" : "text-yellow-400"}>
-                  {phoneData.telnyx_configured ? "Connected" : "Not configured"}
+                <span className="text-muted">Twilio Status</span>
+                <span className={phoneData.twilio_configured ? "text-green-400" : "text-yellow-400"}>
+                  {phoneData.twilio_configured ? "Connected" : "Not configured"}
                 </span>
               </div>
               <div className="flex justify-between">

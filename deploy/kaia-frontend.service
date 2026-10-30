@@ -1,0 +1,16 @@
+[Unit]
+Description=Kaia AI Frontend
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/kaia/frontend
+Environment=NODE_ENV=production
+Environment=PORT=3000
+ExecStart=/usr/bin/node /opt/kaia/frontend/.next/standalone/server.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

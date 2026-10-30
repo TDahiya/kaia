@@ -20,10 +20,9 @@ class Settings(BaseSettings):
     google_sheets_spreadsheet_id: str = ""
     google_memory_doc_id: str = ""
 
-    telnyx_api_key: str = ""
-    telnyx_phone_number: str = ""
-    telnyx_connection_id: str = ""
-    telnyx_webhook_secret: str = ""
+    twilio_account_sid: str = ""
+    twilio_auth_token: str = ""
+    twilio_phone_number: str = ""
 
     owner_phone_e164: str = ""
 
@@ -32,7 +31,7 @@ class Settings(BaseSettings):
     token_encryption_key: str = ""
     jwt_secret: str = "change-me"
 
-    openweather_api_key: str = ""
+    google_maps_api_key: str = ""
 
     monthly_spend_limit_usd: float = 50.0
     max_tool_calls_per_turn: int = 15

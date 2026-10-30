@@ -1,7 +1,7 @@
 """Phone tools — ONLY call the owner's number. Strict backend enforcement."""
 
 import re
-from datetime import date, timezone, datetime
+from datetime import date
 from app.config import get_settings
 from app.database import get_supabase
 from app.services.tool_registry import ToolDef, registry
@@ -10,16 +10,15 @@ E164_RE = re.compile(r"^\+[1-9]\d{6,14}$")
 
 
 async def call_owner(reason: str = "", **ctx) -> dict:
-    """Initiate a call to the owner's phone. Backend-enforced: only OWNER_PHONE_E164."""
+    """Initiate a call to the owner's phone via Twilio."""
     s = get_settings()
     owner_number = s.owner_phone_e164
     if not owner_number or not E164_RE.match(owner_number):
         return {"error": "Owner phone number not configured or invalid."}
 
-    if not s.telnyx_api_key or not s.telnyx_connection_id:
-        return {"error": "Telnyx not configured. Cannot make calls."}
+    if not s.twilio_account_sid or not s.twilio_auth_token or not s.twilio_phone_number:
+        return {"error": "Twilio not configured. Cannot make calls."}
 
-    # Rate limit: daily outbound calls
     db = get_supabase()
     org_id = ctx.get("org_id", "")
     today = date.today().isoformat()
@@ -32,47 +31,46 @@ async def call_owner(reason: str = "", **ctx) -> dict:
     if len(existing.data) >= s.daily_outbound_call_limit:
         return {"error": f"Daily outbound call limit reached ({s.daily_outbound_call_limit})."}
 
-    # Spend limit check
     from app.services.usage_tracker import check_spend_limit
     if not await check_spend_limit(org_id):
         return {"error": "Monthly spend limit reached. Cannot initiate calls."}
 
-    # Initiate call via Telnyx
     import httpx
+    host = s.app_base_url.replace("https://", "").replace("http://", "")
+    twiml_url = f"{s.app_base_url}/api/telephony/webhook/voice"
+    status_url = f"{s.app_base_url}/api/telephony/webhook/status"
+
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.post(
-            "https://api.telnyx.com/v2/calls",
-            headers={
-                "Authorization": f"Bearer {s.telnyx_api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "connection_id": s.telnyx_connection_id,
-                "to": owner_number,
-                "from": s.telnyx_phone_number,
-                "timeout_secs": 30,
-                "time_limit_secs": s.max_call_duration_seconds,
+            f"https://api.twilio.com/2010-04-01/Accounts/{s.twilio_account_sid}/Calls.json",
+            auth=(s.twilio_account_sid, s.twilio_auth_token),
+            data={
+                "To": owner_number,
+                "From": s.twilio_phone_number,
+                "Url": twiml_url,
+                "StatusCallback": status_url,
+                "Timeout": 30,
+                "TimeLimit": s.max_call_duration_seconds,
             },
         )
         if resp.status_code not in (200, 201):
-            return {"error": f"Telnyx API error: {resp.status_code} — {resp.text[:200]}"}
-        call_data = resp.json().get("data", {})
+            return {"error": f"Twilio API error: {resp.status_code} — {resp.text[:200]}"}
+        call_data = resp.json()
 
-    # Log the call
     db.table("call_logs").insert({
         "org_id": org_id,
         "direction": "outbound",
-        "caller_number": s.telnyx_phone_number,
+        "caller_number": s.twilio_phone_number,
         "callee_number": owner_number,
         "status": "initiated",
-        "telnyx_call_control_id": call_data.get("call_control_id"),
+        "telnyx_call_control_id": call_data.get("sid"),
         "metadata": {"reason": reason},
     }).execute()
 
     return {
         "success": True,
         "message": f"Calling owner at {owner_number}",
-        "call_control_id": call_data.get("call_control_id"),
+        "call_sid": call_data.get("sid"),
     }
 
 
