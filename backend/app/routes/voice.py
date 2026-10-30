@@ -82,7 +82,7 @@ You have tools for calendar, email, CRM, weather, maps, and memory. Use them whe
 
     # Connect to Deepgram STT (streaming)
     dg_url = "wss://api.deepgram.com/v1/listen"
-    dg_params = "?model=nova-3&language=en&smart_format=true&endpointing=300&interim_results=true&utterance_end_ms=1000"
+    dg_params = "?model=nova-3&language=en&smart_format=true&endpointing=700&interim_results=true&utterance_end_ms=2000"
 
     messages_history: list[dict] = []
     is_speaking = False
