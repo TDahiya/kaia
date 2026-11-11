@@ -26,6 +26,9 @@ class Settings(BaseSettings):
 
     owner_phone_e164: str = ""
 
+    # Seconds of silence before Kaia fills the gap with "mm-hmm".
+    voice_backchannel_after_s: float = 5.0
+
     app_base_url: str = "http://localhost:3000"
     backend_url: str = "http://localhost:8000"
     token_encryption_key: str = ""

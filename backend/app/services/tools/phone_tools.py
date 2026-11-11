@@ -5,6 +5,7 @@ from datetime import date
 from app.config import get_settings
 from app.database import get_supabase
 from app.services.tool_registry import ToolDef, registry
+from app.services import app_settings
 
 E164_RE = re.compile(r"^\+[1-9]\d{6,14}$")
 
@@ -12,7 +13,7 @@ E164_RE = re.compile(r"^\+[1-9]\d{6,14}$")
 async def call_owner(reason: str = "", **ctx) -> dict:
     """Initiate a call to the owner's phone via Twilio."""
     s = get_settings()
-    owner_number = s.owner_phone_e164
+    owner_number = app_settings.get_owner_phone()
     if not owner_number or not E164_RE.match(owner_number):
         return {"error": "Owner phone number not configured or invalid."}
 

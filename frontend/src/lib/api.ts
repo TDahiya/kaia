@@ -33,6 +33,8 @@ export const api = {
     }),
   getConversations: (limit = 20) => apiFetch(`/api/chat/conversations?limit=${limit}`),
   getMessages: (conversationId: string) => apiFetch(`/api/chat/conversations/${conversationId}/messages`),
+  deleteConversation: (conversationId: string) =>
+    apiFetch(`/api/chat/conversations/${conversationId}`, { method: "DELETE" }),
 
   // Agents
   getAgents: () => apiFetch("/api/agents"),
@@ -67,4 +69,11 @@ export const api = {
 
   // Phone
   getPhoneNumbers: () => apiFetch("/api/telephony/phone-numbers"),
+  callMe: () => apiFetch("/api/telephony/call-me", { method: "POST" }),
+  getOwnerPhone: () => apiFetch("/api/telephony/owner-phone"),
+  setOwnerPhone: (phone: string) =>
+    apiFetch("/api/telephony/owner-phone", {
+      method: "PUT",
+      body: JSON.stringify({ phone }),
+    }),
 };

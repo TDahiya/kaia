@@ -63,7 +63,7 @@ def classify_complexity(message: str) -> ModelTier:
             return ModelTier.STANDARD
     if len(lower) > 500:
         return ModelTier.STANDARD
-    return ModelTier.FAST
+    return ModelTier.STANDARD
 
 
 def get_model_id(tier: ModelTier) -> str:
@@ -96,7 +96,10 @@ class LLMResponse:
 
 
 def build_system_prompt(agent_prompt: str, memories: list[str] | None = None) -> str:
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
     parts = [agent_prompt]
+    parts.append(f"\n\n## Current context\nToday is {now.strftime('%A, %B %d, %Y')}. Current time is {now.strftime('%H:%M')} UTC.")
     if memories:
         parts.append("\n\n## What you know about the user\n" + "\n".join(f"- {m}" for m in memories[:20]))
     return "\n".join(parts)

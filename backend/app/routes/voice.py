@@ -5,7 +5,14 @@ import re
 import asyncio
 import base64
 import random
+import logging
+import traceback
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+if not logger.handlers:
+    logger.addHandler(logging.StreamHandler())
 from app.config import get_settings
 from app.database import get_supabase
 from app.services.ai_brain import chat_with_tools, build_system_prompt, ModelTier, get_async_openai, get_model_id, _convert_tools_for_openai
@@ -51,12 +58,28 @@ async def voice_ws(ws: WebSocket):
         if not org_id:
             await ws.close(1008, "No org found")
             return
-    system_prompt = """You are Kaia, a voice-first personal AI assistant.
-Rules: Reply in 1-2 short sentences max. Sound natural and warm.
-Never include URLs, links, email addresses, or long numbers in your response — the user will hear this spoken aloud.
-Never use markdown, lists, code blocks, or asterisks.
-If a tool returns an error, tell the user honestly what went wrong. Never make up fake results.
-You have tools for calendar, email, CRM, weather, maps, and memory. Use them when helpful but keep answers brief."""
+    system_prompt = """You are Kaia — sharp, warm, a little witty. This is voice — talk like a real person.
+
+## Voice rules
+- One to two sentences max. This is spoken aloud.
+- Never use markdown, lists, numbering, bold, code blocks, or asterisks.
+- Don't read URLs aloud. Say "Done, check the link in the chat."
+- No sign-offs: "Happy driving!", "Enjoy!", "Have a great day!" — just stop.
+- No hedging: "Unfortunately", "I'm sorry but" — be straight.
+- Speak naturally. A brief "okay" or "one sec" before a slow lookup is fine —
+  just don't open every single answer with one.
+- Match their energy. Rushed → quick. Chatting → chat.
+
+## How you work
+- ACT FIRST. "Meeting at 11am" → done. Today if no date, 30min default. Smart defaults, not questions.
+- Only ask when you genuinely can't guess.
+- Never "shall I proceed?" — just do it.
+- If it fails, say so straight. Never fake results.
+- Past dates: tell them, suggest the next one.
+- Typos (gmial.com → gmail.com): fix silently.
+
+## Tools
+Calendar, email, CRM, weather, maps, memory. Use them — don't describe them."""
 
     if agent_id:
         agent = db.table("agents").select("system_prompt").eq("id", agent_id).single().execute()
@@ -85,7 +108,13 @@ You have tools for calendar, email, CRM, weather, maps, and memory. Use them whe
     await ws.send_json({"type": "ready", "conversation_id": conversation_id})
 
     # Pre-cache backchannel fillers in background (ready by the time user speaks)
-    _FILLERS = ["Mm-hmm.", "Yeah.", "Okay.", "Sure.", "Right."]
+    _FILLERS = [
+        "Okay, let me check.",
+        "One sec.",
+        "Mm-hmm, checking.",
+        "Okay.",
+        "Right, give me a moment.",
+    ]
     filler_cache: list[str] = []
 
     async def _tts_one(sentence: str) -> bytes | None:
@@ -117,8 +146,12 @@ You have tools for calendar, email, CRM, weather, maps, and memory. Use them whe
     is_speaking = False
     current_tts_task: asyncio.Task | None = None
 
-    async def _stream_and_speak(messages, prompt, tools_defs, tool_exec):
-        """Stream LLM → sentence queue → TTS concurrently. Returns reply text."""
+    async def _stream_and_speak(messages, prompt, tools_defs, tool_exec, first_audio=None):
+        """Stream LLM → sentence queue → TTS concurrently. Returns reply text.
+
+        `first_audio` is set the moment real speech goes out, so the
+        backchannel watchdog knows it is no longer needed.
+        """
         client = get_async_openai()
         model = get_model_id(ModelTier.FAST)
         oai_tools = _convert_tools_for_openai(tools_defs) if tools_defs else None
@@ -140,6 +173,8 @@ You have tools for calendar, email, CRM, weather, maps, and memory. Use them whe
                 if audio:
                     try:
                         await ws.send_json({"type": "audio", "data": base64.b64encode(audio).decode(), "format": "mp3"})
+                        if first_audio is not None:
+                            first_audio.set()
                     except Exception:
                         return
 
@@ -236,10 +271,6 @@ You have tools for calendar, email, CRM, weather, maps, and memory. Use them whe
 
         await ws.send_json({"type": "transcript_final", "text": transcript})
 
-        if current_tts_task and not current_tts_task.done():
-            current_tts_task.cancel()
-            await ws.send_json({"type": "tts_cancelled"})
-
         db.table("messages").insert({
             "conversation_id": conversation_id,
             "role": "user", "content": transcript,
@@ -257,15 +288,35 @@ You have tools for calendar, email, CRM, weather, maps, and memory. Use them whe
 
         await ws.send_json({"type": "thinking"})
 
-        # Instant backchannel — play cached filler while LLM starts
-        if filler_cache:
-            await ws.send_json({"type": "audio", "data": random.choice(filler_cache), "format": "mp3"})
+        # Backchannel only rescues an awkward silence. If the real answer
+        # starts speaking first, the filler never plays.
+        first_audio = asyncio.Event()
+
+        async def _backchannel():
+            try:
+                await asyncio.wait_for(first_audio.wait(), timeout=s.voice_backchannel_after_s)
+            except asyncio.TimeoutError:
+                if filler_cache and not first_audio.is_set():
+                    try:
+                        await ws.send_json({
+                            "type": "audio",
+                            "data": random.choice(filler_cache),
+                            "format": "mp3",
+                        })
+                    except Exception:
+                        pass
+
+        bc_task = asyncio.create_task(_backchannel())
 
         async def _run():
-            reply, model_used = await _stream_and_speak(
-                messages_history, full_prompt,
-                registry.list_definitions(), tool_executor,
-            )
+            try:
+                reply, model_used = await _stream_and_speak(
+                    messages_history, full_prompt,
+                    registry.list_definitions(), tool_executor,
+                    first_audio=first_audio,
+                )
+            finally:
+                bc_task.cancel()
             messages_history.append({"role": "assistant", "content": reply})
             db.table("messages").insert({
                 "conversation_id": conversation_id,
@@ -328,9 +379,11 @@ You have tools for calendar, email, CRM, weather, maps, and memory. Use them whe
 async def call_media_ws(ws: WebSocket):
     """Twilio media stream WebSocket — bridges phone audio to Deepgram STT/TTS."""
     await ws.accept()
+    logger.info("call-media: WebSocket accepted")
 
     s = get_settings()
     if not s.deepgram_api_key:
+        logger.error("call-media: no Deepgram API key")
         await ws.close(1011, "Deepgram not configured")
         return
 
@@ -339,15 +392,59 @@ async def call_media_ws(ws: WebSocket):
     call_sid: str | None = None
     messages_history: list[dict] = []
     current_tts_task: asyncio.Task | None = None
-    org_id: str | None = None
 
-    system_prompt = (
-        "You are Kaia, an AI assistant on a phone call. Be concise and conversational. "
-        "Do not use markdown, code blocks, or long lists. Speak naturally."
-    )
+    # Resolve org_id and user_id — same as browser voice handler
+    _row = db.table("users").select("id, org_id").limit(1).execute()
+    org_id: str | None = _row.data[0]["org_id"] if _row.data else None
+    user_id: str | None = _row.data[0]["id"] if _row.data else None
+    logger.info("call-media: org_id=%s user_id=%s", org_id, user_id)
+
+    # Load memories — same as browser voice
+    memories_result = db.table("memories") \
+        .select("content") \
+        .eq("org_id", org_id) \
+        .eq("is_active", True) \
+        .order("importance", desc=True) \
+        .limit(10) \
+        .execute()
+    memory_lines = [m["content"] for m in memories_result.data]
+
+    # Use same system prompt as browser voice
+    system_prompt = build_system_prompt("""You are Kaia — sharp, warm, a little witty. This is a phone call. Talk like a person.
+
+## Phone rules
+- One to two sentences max. Snappy.
+- Don't read URLs aloud. Say "Done, I'll drop the link in the app."
+- Never use markdown, lists, numbering, bold, code blocks, or asterisks.
+- No sign-offs: "Happy driving!", "Enjoy!", "Have a great day!" — just stop.
+- No filler: "Sure thing!", "Absolutely!", "Of course!" — just do the thing.
+- No hedging: "Unfortunately", "I'm sorry but" — be straight.
+- Match their energy. Rushed → snappy. Chatty → chat.
+
+## How you work
+- ACT FIRST. "Meeting at 11am" → done. Today if no date, 30min default. Smart defaults, not questions.
+- Only ask when you genuinely can't guess.
+- Never "shall I proceed?" — just do it.
+- If it fails, say so straight. Never fake results.
+- Past dates: tell them, suggest the next one.
+- Typos (gmial.com → gmail.com): fix silently.
+
+## Tools
+Calendar, email, CRM, weather, maps, memory. Use them — don't describe them.""", memory_lines)
+
+    # Create a conversation for this call
+    conversation_id: str = ""
+    try:
+        conv = db.table("conversations").insert({
+            "org_id": org_id, "user_id": user_id,
+            "mode": "voice", "title": "Phone call",
+        }).execute()
+        conversation_id = conv.data[0]["id"]
+        logger.info("call-media: conversation_id=%s", conversation_id)
+    except Exception:
+        logger.exception("call-media: failed to create conversation")
 
     async def send_tts_to_call(text: str):
-        nonlocal org_id
         try:
             async with httpx.AsyncClient(timeout=30) as client:
                 tts_resp = await client.post(
@@ -360,7 +457,6 @@ async def call_media_ws(ws: WebSocket):
                     json={"text": text},
                 )
                 if tts_resp.status_code == 200 and stream_sid:
-                    import base64
                     audio_b64 = base64.b64encode(tts_resp.content).decode()
                     await ws.send_json({
                         "event": "media",
@@ -369,16 +465,20 @@ async def call_media_ws(ws: WebSocket):
                     })
                     if org_id:
                         await track_tts_usage(org_id, len(text))
+                else:
+                    logger.error("call-media: TTS failed status=%s", tts_resp.status_code)
         except asyncio.CancelledError:
             pass
         except Exception:
-            pass
+            logger.exception("call-media: TTS send failed")
 
     async def process_phone_transcript(transcript: str, is_final: bool):
         nonlocal messages_history, current_tts_task
 
         if not is_final or not transcript.strip():
             return
+
+        logger.info("call-media: transcript: '%s'", transcript)
 
         if current_tts_task and not current_tts_task.done():
             current_tts_task.cancel()
@@ -387,29 +487,69 @@ async def call_media_ws(ws: WebSocket):
         if len(messages_history) > 10:
             messages_history = messages_history[-10:]
 
+        # Save to DB like browser voice does
+        if conversation_id:
+            try:
+                db.table("messages").insert({
+                    "conversation_id": conversation_id,
+                    "role": "user", "content": transcript,
+                }).execute()
+            except Exception:
+                pass
+
         async def tool_executor(name, args):
+            logger.info("call-media: tool call: %s(%s)", name, list(args.keys()))
+            args["user_id"] = user_id or ""
             args["org_id"] = org_id or ""
-            return await registry.execute(name, args, org_id=org_id or "", conversation_id="")
+            args["conversation_id"] = conversation_id
+            result = await registry.execute(name, args, org_id=org_id or "", conversation_id=conversation_id)
+            logger.info("call-media: tool result: %s", str(result)[:200])
+            return result
 
-        resp = await chat_with_tools(
-            messages=messages_history,
-            system_prompt=system_prompt,
-            tools_definitions=registry.list_definitions(),
-            tool_executor=tool_executor,
-            org_id=org_id or "",
-            tier=ModelTier.FAST,
-        )
+        try:
+            resp = await chat_with_tools(
+                messages=messages_history,
+                system_prompt=system_prompt,
+                tools_definitions=registry.list_definitions(),
+                tool_executor=tool_executor,
+                org_id=org_id or "",
+                tier=ModelTier.FAST,
+            )
+            reply = resp.content
+            logger.info("call-media: reply: '%s'", reply[:200])
+        except Exception:
+            logger.exception("call-media: LLM/tool call failed")
+            reply = "Sorry, something went wrong on my end."
 
-        reply = resp.content
         messages_history.append({"role": "assistant", "content": reply})
+
+        # Save assistant reply to DB
+        if conversation_id:
+            try:
+                db.table("messages").insert({
+                    "conversation_id": conversation_id,
+                    "role": "assistant", "content": reply,
+                }).execute()
+            except Exception:
+                pass
+
         current_tts_task = asyncio.create_task(send_tts_to_call(reply))
 
     try:
         import websockets as ws_lib
+        dg_stt_url = (
+            "wss://api.deepgram.com/v1/listen"
+            "?model=nova-3&language=en"
+            "&encoding=mulaw&sample_rate=8000"
+            "&endpointing=300&utterance_end_ms=1000"
+            "&interim_results=true"
+        )
+        logger.info("call-media: connecting to Deepgram STT…")
         async with ws_lib.connect(
-            "wss://api.deepgram.com/v1/listen?model=nova-3&language=en&encoding=mulaw&sample_rate=8000&endpointing=300&utterance_end_ms=1000",
+            dg_stt_url,
             additional_headers={"Authorization": f"Token {s.deepgram_api_key}"},
         ) as dg_ws:
+            logger.info("call-media: Deepgram connected")
 
             async def receive_dg_phone():
                 async for msg in dg_ws:
@@ -423,9 +563,12 @@ async def call_media_ws(ws: WebSocket):
 
             async def forward_twilio_audio():
                 nonlocal stream_sid, call_sid, org_id
+                media_count = 0
                 while True:
                     msg = await ws.receive()
-                    if msg.get("type") == "websocket.disconnect":
+                    msg_type = msg.get("type", "")
+                    if msg_type == "websocket.disconnect":
+                        logger.info("call-media: WS disconnected after %d media packets", media_count)
                         break
                     if "text" in msg:
                         data = json.loads(msg["text"])
@@ -433,6 +576,7 @@ async def call_media_ws(ws: WebSocket):
                         if event == "start":
                             stream_sid = data.get("streamSid")
                             call_sid = data.get("start", {}).get("callSid")
+                            logger.info("call-media: stream started sid=%s call=%s", stream_sid, call_sid)
                             if call_sid:
                                 log = db.table("call_logs") \
                                     .select("org_id") \
@@ -441,19 +585,32 @@ async def call_media_ws(ws: WebSocket):
                                 if log.data:
                                     org_id = log.data[0]["org_id"]
                         elif event == "media":
-                            import base64
                             payload = data.get("media", {}).get("payload", "")
                             if payload:
+                                media_count += 1
+                                if media_count <= 3 or media_count % 100 == 0:
+                                    logger.info("call-media: forwarding packet #%d (%d bytes)", media_count, len(payload))
                                 await dg_ws.send(base64.b64decode(payload))
                         elif event == "stop":
+                            logger.info("call-media: stream stopped after %d media packets", media_count)
                             break
+                    elif "bytes" in msg:
+                        logger.info("call-media: got binary frame (unexpected)")
+                    else:
+                        logger.info("call-media: unknown msg type=%s", msg_type)
 
             await asyncio.gather(receive_dg_phone(), forward_twilio_audio())
 
     except WebSocketDisconnect:
-        pass
-    except Exception:
-        pass
+        logger.info("call-media: Twilio disconnected normally")
+    except Exception as exc:
+        logger.exception("call-media: handler crashed")
+        if hasattr(exc, "response"):
+            resp = exc.response
+            logger.error("call-media: rejection status=%s headers=%s body=%s",
+                         resp.status_code if hasattr(resp, "status_code") else "?",
+                         dict(resp.headers) if hasattr(resp, "headers") else "?",
+                         resp.body.decode(errors="replace") if hasattr(resp, "body") and resp.body else "?")
     finally:
         if current_tts_task and not current_tts_task.done():
             current_tts_task.cancel()

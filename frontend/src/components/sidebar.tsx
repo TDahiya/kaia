@@ -3,64 +3,100 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard, Bot, MessageSquare, Mic, Brain, Phone,
-  Settings, BarChart3, BookOpen, Wrench, LogOut,
+  LayoutGrid, MessageSquare, Bot, Brain, Wrench, BarChart3, Settings,
+  LogOut, Sun, Moon,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { useTheme } from "@/lib/theme-context";
+import { KaiaMark, Wordmark } from "./brand";
 
-const nav = [
-  { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
-  { href: "/dashboard/chat", label: "Chat", icon: MessageSquare },
-  { href: "/dashboard/agents", label: "Agents", icon: Bot },
-  { href: "/dashboard/voice", label: "Voice", icon: Mic },
-  { href: "/dashboard/memories", label: "Memories", icon: Brain },
-  { href: "/dashboard/phone", label: "Phone", icon: Phone },
-  { href: "/dashboard/tools", label: "Tools", icon: Wrench },
-  { href: "/dashboard/knowledge", label: "Knowledge", icon: BookOpen },
-  { href: "/dashboard/usage", label: "Usage", icon: BarChart3 },
-  { href: "/dashboard/settings", label: "Settings", icon: Settings },
+/* Two groups: what you do, and what you configure. */
+const primary = [
+  { href: "/overview", label: "Overview", icon: LayoutGrid },
+  { href: "/chat", label: "Chat", icon: MessageSquare },
 ];
 
-export function Sidebar() {
+const secondary = [
+  { href: "/agents", label: "Agents", icon: Bot },
+  { href: "/memories", label: "Memories", icon: Brain },
+  { href: "/tools", label: "Tools", icon: Wrench },
+  { href: "/usage", label: "Usage", icon: BarChart3 },
+  { href: "/settings", label: "Settings", icon: Settings },
+];
+
+function NavItem({
+  href, label, icon: Icon, active, onNavigate,
+}: { href: string; label: string; icon: any; active: boolean; onNavigate?: () => void }) {
+  return (
+    <Link
+      href={href}
+      onClick={onNavigate}
+      className={`relative flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] transition-colors ${
+        active
+          ? "text-text bg-[var(--accent-soft)] font-medium"
+          : "text-text-3 hover:text-text-2 hover:bg-surface-hover"
+      }`}
+    >
+      {active && (
+        <span className="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-[3px] rounded-r-full bg-accent" />
+      )}
+      <Icon size={16} strokeWidth={active ? 2.2 : 1.75} className={active ? "text-accent" : ""} />
+      {label}
+    </Link>
+  );
+}
+
+export function Sidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const pathname = usePathname();
   const { signOut, user } = useAuth();
+  const { theme, toggle } = useTheme();
+
+  const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
 
   return (
-    <aside className="w-60 flex flex-col border-r border-border bg-surface h-screen sticky top-0">
-      <div className="p-4 border-b border-border">
-        <h1 className="text-lg font-semibold tracking-tight">
-          <span className="text-accent">Kaia</span>
-          <span className="text-muted text-xs ml-2 font-normal">AI Assistant</span>
-        </h1>
+    <aside className="w-[232px] h-screen sticky top-0 flex flex-col bg-bg border-r border-border">
+      <div className="px-5 pt-6 pb-6">
+        <Link href="/overview" onClick={onNavigate} className="flex items-center gap-2.5">
+          <KaiaMark size={24} />
+          <Wordmark />
+        </Link>
       </div>
 
-      <nav className="flex-1 p-2 space-y-0.5 overflow-y-auto">
-        {nav.map(({ href, label, icon: Icon }) => {
-          const active = pathname === href || (href !== "/dashboard" && pathname.startsWith(href));
-          return (
-            <Link
-              key={href}
-              href={href}
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm ${
-                active
-                  ? "bg-accent/10 text-accent font-medium"
-                  : "text-muted hover:text-foreground hover:bg-surface-hover"
-              }`}
-            >
-              <Icon size={18} />
-              {label}
-            </Link>
-          );
-        })}
+      <nav className="flex-1 px-3 overflow-y-auto">
+        <div className="space-y-1">
+          {primary.map((item) => (
+            <NavItem key={item.href} {...item} active={isActive(item.href)} onNavigate={onNavigate} />
+          ))}
+        </div>
+
+        <div className="mt-8 mb-2 px-3">
+          <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-text-4">Workspace</span>
+        </div>
+        <div className="space-y-1">
+          {secondary.map((item) => (
+            <NavItem key={item.href} {...item} active={isActive(item.href)} onNavigate={onNavigate} />
+          ))}
+        </div>
       </nav>
 
-      <div className="p-3 border-t border-border">
-        <div className="text-xs text-muted truncate mb-2 px-1">{user?.email}</div>
+      <div className="border-t border-border p-3 space-y-1">
+        <button
+          onClick={toggle}
+          className="flex items-center gap-3 w-full px-3 py-2 rounded-lg text-[13px] text-text-3 hover:text-text-2 hover:bg-surface-hover transition-colors"
+        >
+          {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
+          {theme === "dark" ? "Light mode" : "Dark mode"}
+        </button>
+
+        <div className="px-3 pt-2 pb-1">
+          <div className="text-[11px] font-mono text-text-4 truncate">{user?.email}</div>
+        </div>
+
         <button
           onClick={() => signOut()}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm text-muted hover:text-foreground hover:bg-surface-hover w-full"
+          className="flex items-center gap-3 w-full px-3 py-2 rounded-lg text-[13px] text-text-3 hover:text-bad hover:bg-[var(--bad-soft)] transition-colors"
         >
-          <LogOut size={16} />
+          <LogOut size={15} />
           Sign out
         </button>
       </div>

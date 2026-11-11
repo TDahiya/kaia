@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends
 from app.config import get_settings
 from app.auth import get_current_user
+from app.services import app_settings
 
 router = APIRouter(prefix="/api", tags=["health"])
 
@@ -26,7 +27,7 @@ async def system_status(user: dict = Depends(get_current_user)):
         "google_oauth": check(s.google_client_id),
         "twilio": check(s.twilio_account_sid),
         "twilio_phone": check(s.twilio_phone_number),
-        "owner_phone": check(s.owner_phone_e164),
+        "owner_phone": check(app_settings.get_owner_phone()),
         "encryption": check(s.token_encryption_key),
         "weather": check(s.google_maps_api_key),
         "maps": check(s.google_maps_api_key),

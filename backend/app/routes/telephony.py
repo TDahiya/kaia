@@ -1,11 +1,17 @@
 """Twilio telephony webhooks — inbound/outbound call handling."""
 
-from fastapi import APIRouter, Request, Form
+from fastapi import APIRouter, Request, Form, HTTPException
 from fastapi.responses import Response
+from pydantic import BaseModel
 from app.config import get_settings
 from app.database import get_supabase
+from app.services import app_settings
 
 router = APIRouter(prefix="/api/telephony", tags=["telephony"])
+
+
+class OwnerPhoneUpdate(BaseModel):
+    phone: str
 
 
 @router.post("/webhook/voice")
@@ -77,6 +83,49 @@ async def twilio_status_webhook(request: Request):
     return {"status": "ok"}
 
 
+@router.post("/call-me")
+async def call_me(request: Request):
+    """Trigger Kaia to call the owner — used by the 'Call me' button in the UI."""
+    s = get_settings()
+    owner_phone = app_settings.get_owner_phone()
+    if not owner_phone:
+        return {"error": "No number set. Add yours in Settings."}
+    if not s.twilio_account_sid:
+        return {"error": "Twilio is not configured."}
+
+    import httpx
+    twiml_url = f"{s.app_base_url}/api/telephony/webhook/voice"
+    status_url = f"{s.app_base_url}/api/telephony/webhook/status"
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.post(
+            f"https://api.twilio.com/2010-04-01/Accounts/{s.twilio_account_sid}/Calls.json",
+            auth=(s.twilio_account_sid, s.twilio_auth_token),
+            data={
+                "To": owner_phone,
+                "From": s.twilio_phone_number,
+                "Url": twiml_url,
+                "StatusCallback": status_url,
+                "Timeout": 30,
+            },
+        )
+        if resp.status_code not in (200, 201):
+            return {"error": f"Call failed: {resp.text[:200]}"}
+        call_data = resp.json()
+
+    db = get_supabase()
+    db.table("call_logs").insert({
+        "org_id": "",
+        "direction": "outbound",
+        "caller_number": s.twilio_phone_number,
+        "callee_number": owner_phone,
+        "status": "initiated",
+        "telnyx_call_control_id": call_data.get("sid"),
+    }).execute()
+
+    return {"success": True, "message": f"Calling {owner_phone}..."}
+
+
 @router.get("/phone-numbers")
 async def list_phone_numbers():
     db = get_supabase()
@@ -87,3 +136,25 @@ async def list_phone_numbers():
         "configured_number": s.twilio_phone_number,
         "twilio_configured": bool(s.twilio_account_sid and s.twilio_auth_token),
     }
+
+
+@router.get("/owner-phone")
+async def get_owner_phone():
+    """The single number Kaia is permitted to dial."""
+    s = get_settings()
+    return {
+        "owner_phone": app_settings.get_owner_phone() or None,
+        "from_number": s.twilio_phone_number or None,
+        "twilio_configured": bool(s.twilio_account_sid and s.twilio_auth_token),
+    }
+
+
+@router.put("/owner-phone")
+async def set_owner_phone(body: OwnerPhoneUpdate):
+    try:
+        phone = app_settings.normalize_phone(body.phone)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    app_settings.set_value(app_settings.OWNER_PHONE, phone)
+    return {"success": True, "owner_phone": phone}
