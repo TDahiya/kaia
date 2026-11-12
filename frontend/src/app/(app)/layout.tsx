@@ -30,6 +30,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-screen bg-bg">
+      {/* Sits behind every page. Pages must not paint an opaque background
+          over it — use transparent surfaces and let this show through. */}
       <div className="bloom" />
       <div className="grid-field" />
 

@@ -1,8 +1,12 @@
 """Twilio telephony webhooks — inbound/outbound call handling."""
 
+import logging
+
 from fastapi import APIRouter, Request, Form, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 from app.config import get_settings
 from app.database import get_supabase
 from app.services import app_settings
@@ -22,9 +26,26 @@ async def twilio_voice_webhook(request: Request):
     from_number = form.get("From", "")
     to_number = form.get("To", "")
     direction = form.get("Direction", "inbound")
+    answered_by = (form.get("AnsweredBy") or "").lower()
 
     s = get_settings()
     db = get_supabase()
+
+    # Voicemail answers like a person and then reads its own prompts at you.
+    # Without this Kaia holds a full conversation with the IVR, burning a
+    # model call and TTS on every prompt until the mailbox hangs up.
+    if answered_by.startswith("machine") or answered_by == "fax":
+        logger.info("call-media: %s answered by %s — hanging up", call_sid, answered_by)
+        if call_sid:
+            try:
+                db.table("call_logs").update({"status": "voicemail"}) \
+                    .eq("telnyx_call_control_id", call_sid).execute()
+            except Exception:
+                pass
+        return Response(
+            content='<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>',
+            media_type="application/xml",
+        )
 
     phone_result = db.table("phone_numbers") \
         .select("org_id") \
@@ -44,10 +65,18 @@ async def twilio_voice_webhook(request: Request):
         }).execute()
 
     host = s.app_base_url.replace("https://", "").replace("http://", "")
+
+    # A guest call carries its pass id through to the media socket, which
+    # uses it to swap in the restricted prompt and tool set.
+    guest = (request.query_params.get("guest") or "").strip()
+    stream = f"wss://{host}/ws/call-media"
+    if guest:
+        stream += f"?guest={guest}"
+
     twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Connect>
-        <Stream url="wss://{host}/ws/call-media" />
+        <Stream url="{stream}" />
     </Connect>
 </Response>"""
     return Response(content=twiml, media_type="application/xml")
@@ -107,21 +136,36 @@ async def call_me(request: Request):
                 "Url": twiml_url,
                 "StatusCallback": status_url,
                 "Timeout": 30,
+                # Twilio decides human vs machine before running our TwiML,
+                # so the webhook can hang up on voicemail instead of talking
+                # to it. Synchronous (no AsyncAmd) so AnsweredBy is present.
+                "MachineDetection": "Enable",
+                "MachineDetectionTimeout": 10,
             },
         )
         if resp.status_code not in (200, 201):
             return {"error": f"Call failed: {resp.text[:200]}"}
         call_data = resp.json()
 
-    db = get_supabase()
-    db.table("call_logs").insert({
-        "org_id": "",
-        "direction": "outbound",
-        "caller_number": s.twilio_phone_number,
-        "callee_number": owner_phone,
-        "status": "initiated",
-        "telnyx_call_control_id": call_data.get("sid"),
-    }).execute()
+    # The call is already placed by this point. Logging it is bookkeeping,
+    # so a failure here must not be reported to the user as a failed call —
+    # an empty org_id used to throw here and surface as a 500 while the
+    # phone was actively ringing.
+    try:
+        db = get_supabase()
+        owner = db.table("users").select("org_id").limit(1).execute()
+        org_id = owner.data[0]["org_id"] if owner.data else None
+        if org_id:
+            db.table("call_logs").insert({
+                "org_id": org_id,
+                "direction": "outbound",
+                "caller_number": s.twilio_phone_number,
+                "callee_number": owner_phone,
+                "status": "initiated",
+                "telnyx_call_control_id": call_data.get("sid"),
+            }).execute()
+    except Exception:
+        logger.exception("call-me: placed the call but could not log it")
 
     return {"success": True, "message": f"Calling {owner_phone}..."}
 

@@ -88,6 +88,14 @@ export default function LoginPage() {
             {isSignUp ? "Already have an account? Sign in" : "Create an account"}
           </button>
         </form>
+
+        {/* Guests land here by mistake — their code works at /try, not as a password. */}
+        <div className="mt-10 pt-6 border-t border-border text-center rise" style={{ animationDelay: "120ms" }}>
+          <p className="text-[12px] text-text-4">
+            Been given an access code?{" "}
+            <a href="/try" className="text-accent hover:underline underline-offset-2">Use it here</a>
+          </p>
+        </div>
       </div>
     </div>
   );

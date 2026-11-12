@@ -16,9 +16,14 @@ const jetbrains = JetBrains_Mono({
   display: "swap",
 });
 
+const SITE = "https://kaia-ai.duckdns.org";
+
+const DESCRIPTION =
+  "A personal AI assistant that handles your calendar, email and documents — and calls your phone.";
+
 export const metadata: Metadata = {
   title: "Kaia",
-  description: "Your personal AI assistant",
+  description: DESCRIPTION,
 };
 
 const noFlash = `
@@ -32,6 +37,22 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" data-theme="dark" className={`${bricolage.variable} ${jetbrains.variable} h-full`}>
       <head>
+        {/* Written as plain tags rather than via the metadata API: an
+            openGraph block there forces runtime metadata on /agents/[id],
+            which cacheComponents refuses to prerender. */}
+        <meta property="og:type" content="website" />
+        <meta property="og:site_name" content="Kaia" />
+        <meta property="og:url" content={SITE} />
+        <meta property="og:title" content="Kaia — your personal AI assistant" />
+        <meta property="og:description" content={DESCRIPTION} />
+        <meta property="og:image" content={`${SITE}/og.png`} />
+        <meta property="og:image:width" content="1200" />
+        <meta property="og:image:height" content="630" />
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content="Kaia — your personal AI assistant" />
+        <meta name="twitter:description" content={DESCRIPTION} />
+        <meta name="twitter:image" content={`${SITE}/og.png`} />
+        <meta name="theme-color" content="#130303" />
         <script dangerouslySetInnerHTML={{ __html: noFlash }} />
       </head>
       <body className="min-h-full">

@@ -14,8 +14,14 @@ import app.services.tools.google_gmail  # noqa: F401
 import app.services.tools.google_sheets_crm  # noqa: F401
 import app.services.tools.phone_tools  # noqa: F401
 import app.services.tools.google_maps  # noqa: F401
+import app.services.tools.document_tools  # noqa: F401
+import app.services.tools.export_tools  # noqa: F401
+import app.services.tools.guest_tools  # noqa: F401
 
-from app.routes import chat, agents, integrations, usage, memories, voice, telephony, health
+from app.routes import (
+    chat, agents, integrations, usage, memories, voice, telephony, health, documents,
+    guest,
+)
 
 scheduler = AsyncIOScheduler()
 
@@ -65,3 +71,5 @@ app.include_router(usage.router)
 app.include_router(memories.router)
 app.include_router(voice.router)
 app.include_router(telephony.router)
+app.include_router(documents.router)
+app.include_router(guest.router)

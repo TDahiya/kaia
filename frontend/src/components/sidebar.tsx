@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutGrid, MessageSquare, Bot, Brain, Wrench, BarChart3, Settings,
-  LogOut, Sun, Moon,
+  LogOut, Sun, Moon, KeyRound,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useTheme } from "@/lib/theme-context";
@@ -20,6 +20,7 @@ const secondary = [
   { href: "/agents", label: "Agents", icon: Bot },
   { href: "/memories", label: "Memories", icon: Brain },
   { href: "/tools", label: "Tools", icon: Wrench },
+  { href: "/passes", label: "Guest passes", icon: KeyRound },
   { href: "/usage", label: "Usage", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

@@ -117,8 +117,12 @@ export default function SettingsPage() {
         <Card className="rise" >
           <CardTitle
             action={
-              <Pill tone={google?.connected ? "ok" : "warn"}>
-                {google?.connected ? "connected" : "not connected"}
+              <Pill tone={google?.connected ? "ok" : google?.status === "expired" ? "bad" : "warn"}>
+                {google?.connected
+                  ? "connected"
+                  : google?.status === "expired"
+                    ? "needs reconnect"
+                    : "not connected"}
               </Pill>
             }
           >
@@ -128,6 +132,16 @@ export default function SettingsPage() {
           <p className="text-[13px] text-text-3 mb-4 leading-relaxed">
             Calendar, Gmail, Sheets and Docs. Tokens are encrypted at rest.
           </p>
+
+          {google?.status === "expired" && (
+            <div className="text-[12px] px-3 py-2.5 rounded-lg mb-4 text-bad" style={{ background: "var(--bad-soft)" }}>
+              Google revoked the saved token, so calendar and email are offline
+              until you reconnect. If this keeps happening every few days, set
+              the OAuth app&apos;s publishing status to <strong>In production</strong> in
+              Google Cloud Console — apps left in <strong>Testing</strong> get refresh
+              tokens that expire after 7 days.
+            </div>
+          )}
 
           {google?.scopes && (
             <div className="flex flex-wrap gap-1.5 mb-4">

@@ -1,5 +1,45 @@
 "use client";
 
+/* ── Geometry ──────────────────────────────────────────────
+   The spark is generated from an explicit centre and radius so
+   it can never drift away from the rings it sits inside. The
+   control-point ratios are what give the arms their pinch.     */
+const PINCH_OUT = 0.5545;
+const PINCH_IN = 0.4455;
+
+export function sparkPath(cx: number, cy: number, r: number): string {
+  const a = +(PINCH_OUT * r).toFixed(3);
+  const b = +(PINCH_IN * r).toFixed(3);
+  return [
+    `M ${cx},${cy - r}`,
+    `c 0,${a} ${-b},${r} ${-r},${r}`,
+    `c ${a},0 ${r},${b} ${r},${r}`,
+    `c 0,${-a} ${b},${-r} ${r},${-r}`,
+    `c ${-a},0 ${-r},${-b} ${-r},${-r}`,
+    "Z",
+  ].join(" ");
+}
+
+/* An orbit drawn as a dashed circle is concentric by construction —
+   an arc path has to be solved for its centre, and ours was 1px out. */
+function Orbit({ cx, cy, r, width = 1.75, gap = 0.2, rotate = -40 }: {
+  cx: number; cy: number; r: number; width?: number; gap?: number; rotate?: number;
+}) {
+  const circumference = 2 * Math.PI * r;
+  return (
+    <circle
+      cx={cx} cy={cy} r={r}
+      fill="none"
+      stroke="var(--chestnut)"
+      strokeWidth={width}
+      strokeLinecap="round"
+      strokeDasharray={`${circumference * (1 - gap)} ${circumference * gap}`}
+      transform={`rotate(${rotate} ${cx} ${cy})`}
+      opacity="0.85"
+    />
+  );
+}
+
 /* ── The mark ──────────────────────────────────────────────
    A four-point spark inside an open orbit. The spark is the
    answer; the orbit is Kaia staying in range. Reads at 16px.  */
@@ -12,20 +52,8 @@ export function KaiaMark({ size = 24, orbit = true }: { size?: number; orbit?: b
           <stop offset="1" stopColor="var(--accent)" />
         </linearGradient>
       </defs>
-      {orbit && (
-        <path
-          d="M26.5 9.5a13 13 0 1 1-8-5.2"
-          stroke="var(--chestnut)"
-          strokeWidth="1.75"
-          strokeLinecap="round"
-          fill="none"
-          opacity="0.85"
-        />
-      )}
-      <path
-        d="M16 5c0 6.1 -4.9 11 -11 11 6.1 0 11 4.9 11 11 0-6.1 4.9-11 11-11-6.1 0-11-4.9-11-11Z"
-        fill="url(#km-g)"
-      />
+      {orbit && <Orbit cx={16} cy={16} r={13} />}
+      <path d={sparkPath(16, 16, 11)} fill="url(#km-g)" />
     </svg>
   );
 }
@@ -50,14 +78,18 @@ export function Wordmark({ size = 15 }: { size?: number }) {
    Flat vector, warm palette, one accent focal point each.    */
 
 export function SceneSignal({ size = 168 }: { size?: number }) {
+  // One centre for the spark, every ring and the glow — previously the
+  // spark sat 26px above the rings, which read as a misaligned logo.
+  const CX = 120;
+  const CY = 100;
   return (
     <svg width={size} height={size * 0.72} viewBox="0 0 240 172" fill="none" aria-hidden="true">
-      <ellipse cx="120" cy="150" rx="86" ry="10" fill="var(--accent-soft)" />
-      {[46, 64, 82].map((r, i) => (
+      <ellipse cx={CX} cy="152" rx="86" ry="9" fill="var(--accent-soft)" />
+      {[44, 62, 80].map((r, i) => (
         <circle
           key={r}
-          cx="120"
-          cy="104"
+          cx={CX}
+          cy={CY}
           r={r}
           stroke="var(--chestnut)"
           strokeWidth="1"
@@ -66,12 +98,12 @@ export function SceneSignal({ size = 168 }: { size?: number }) {
           strokeDasharray="3 6"
         />
       ))}
-      <path d="M120 60a18 18 0 0 1-18 18 18 18 0 0 1 18 18 18 18 0 0 1 18-18 18 18 0 0 1-18-18Z" fill="var(--accent)" />
-      <circle cx="54" cy="56" r="3" fill="var(--chestnut)" />
-      <circle cx="196" cy="74" r="2.5" fill="var(--chestnut)" />
-      <circle cx="178" cy="36" r="2" fill="var(--accent)" opacity="0.7" />
-      <circle cx="70" cy="128" r="2" fill="var(--accent)" opacity="0.5" />
-      <path d="M38 96h16M186 112h18" stroke="var(--chestnut)" strokeWidth="1.5" strokeLinecap="round" opacity="0.6" />
+      <path d={sparkPath(CX, CY, 20)} fill="var(--accent)" />
+      <circle cx="54" cy="52" r="3" fill="var(--chestnut)" />
+      <circle cx="198" cy="70" r="2.5" fill="var(--chestnut)" />
+      <circle cx="178" cy="32" r="2" fill="var(--accent)" opacity="0.7" />
+      <circle cx="66" cy="132" r="2" fill="var(--accent)" opacity="0.5" />
+      <path d="M22 92h14M206 110h14" stroke="var(--chestnut)" strokeWidth="1.5" strokeLinecap="round" opacity="0.6" />
     </svg>
   );
 }
@@ -133,7 +165,7 @@ export function SceneOrbit({ size = 160 }: { size?: number }) {
         transform="rotate(62 110 84)"
       />
       <circle cx="110" cy="84" r="24" fill="var(--surface-raised)" stroke="var(--accent)" strokeWidth="1.5" />
-      <path d="M110 73a11 11 0 0 1-11 11 11 11 0 0 1 11 11 11 11 0 0 1 11-11 11 11 0 0 1-11-11Z" fill="var(--accent)" />
+      <path d={sparkPath(110, 84, 12)} fill="var(--accent)" />
       <circle cx="192" cy="84" r="5" fill="var(--chestnut)" />
       <circle cx="28" cy="84" r="4" fill="var(--chestnut)" />
       <circle cx="148" cy="30" r="3.5" fill="var(--accent)" opacity="0.8" />

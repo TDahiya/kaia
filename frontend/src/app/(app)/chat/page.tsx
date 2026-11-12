@@ -5,9 +5,10 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import {
   Mic, Square, Wrench, Phone, Plus, PanelLeft, ArrowUp, Trash2, Check, X,
+  Paperclip, FileSpreadsheet, FileText, Loader2,
 } from "lucide-react";
 import { KaiaMark, SceneSignal } from "@/components/brand";
-import { Pill } from "@/components/ui";
+import { VoiceOrb } from "@/components/voice-orb";
 
 function RichText({ text }: { text: string }) {
   const parts = useMemo(() => {
@@ -48,6 +49,7 @@ interface Message {
   tokens_in?: number;
   tokens_out?: number;
   toolCalls?: string[];
+  files?: { id: string; filename: string; kind: string }[];
   timestamp?: string;
 }
 
@@ -72,12 +74,25 @@ export default function ChatPage() {
   const [calling, setCalling] = useState(false);
   const [callStatus, setCallStatus] = useState("");
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<any[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const [toolRunning, setToolRunning] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+  const voiceIdx = useRef(-1);
 
   const endRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const queueRef = useRef<string[]>([]);
-  const playingRef = useRef(false);
+
+  // Streamed TTS arrives as raw PCM, so playback is scheduled on a shared
+  // timeline rather than played as discrete clips — that is what keeps
+  // one answer sounding continuous instead of stitched together.
+  const ctxRef = useRef<AudioContext | null>(null);
+  const playheadRef = useRef(0);
+  const sourcesRef = useRef<AudioBufferSourceNode[]>([]);
+  const carryRef = useRef<Uint8Array>(new Uint8Array(0));
+  const gainRef = useRef<GainNode | null>(null);
+  const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
@@ -94,6 +109,29 @@ export default function ChatPage() {
     })));
     setConversationId(id);
     setShowHistory(false);
+    // The composer only ever holds files not yet sent, so opening an old
+    // thread must not repopulate it with that thread's attachments.
+    setAttachments([]);
+  };
+
+  const attachFile = async (file: File) => {
+    setUploading(true);
+    setUploadError("");
+    try {
+      const doc = await api.uploadDocument(file, conversationId || undefined);
+      setAttachments((prev) => [...prev, doc]);
+    } catch (e: any) {
+      setUploadError(e.message);
+      setTimeout(() => setUploadError(""), 6000);
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  const detachFile = async (id: string) => {
+    setAttachments((prev) => prev.filter((d) => d.id !== id));
+    try { await api.deleteDocument(id); } catch {}
   };
 
   const deleteConversation = async (id: string) => {
@@ -108,22 +146,64 @@ export default function ChatPage() {
   const send = async () => {
     if (!input.trim() || loading) return;
     const text = input.trim();
+    const sent = attachments;
     setInput("");
-    setMessages((p) => [...p, { role: "user", content: text, timestamp: new Date().toISOString() }]);
+    // Attachments belong to the message once sent, not to the composer.
+    setAttachments([]);
+    setMessages((p) => [
+      ...p,
+      { role: "user", content: text, files: sent, timestamp: new Date().toISOString() },
+    ]);
     setLoading(true);
+
+    let index = -1;
     try {
-      const r = await api.sendMessage(text, conversationId || undefined);
-      setConversationId(r.conversation_id);
-      setMessages((p) => [...p, {
-        role: "assistant", content: r.reply, model: r.model,
-        tokens_in: r.tokens_in, tokens_out: r.tokens_out,
-        toolCalls: r.tool_calls_made, timestamp: new Date().toISOString(),
-      }]);
+      await api.streamMessage(
+        text,
+        (e) => {
+          if (e.type === "meta") {
+            setConversationId(e.conversation_id);
+          } else if (e.type === "tool") {
+            setToolRunning(e.name);
+          } else if (e.type === "delta") {
+            setToolRunning("");
+            setMessages((p) => {
+              const next = [...p];
+              if (index < 0) {
+                next.push({ role: "assistant", content: e.text, timestamp: new Date().toISOString() });
+                index = next.length - 1;
+              } else {
+                next[index] = { ...next[index], content: next[index].content + e.text };
+              }
+              return next;
+            });
+          } else if (e.type === "done") {
+            setToolRunning("");
+            setMessages((p) => {
+              if (index < 0) return p;
+              const next = [...p];
+              next[index] = {
+                ...next[index],
+                model: e.model,
+                tokens_in: e.tokens_in,
+                tokens_out: e.tokens_out,
+                toolCalls: e.tool_calls_made,
+              };
+              return next;
+            });
+          } else if (e.type === "error") {
+            setMessages((p) => [...p, { role: "system", content: e.message }]);
+          }
+        },
+        conversationId || undefined,
+        sent.map((d) => d.id),
+      );
       loadList();
     } catch (e: any) {
       setMessages((p) => [...p, { role: "system", content: e.message }]);
     } finally {
       setLoading(false);
+      setToolRunning("");
     }
   };
 
@@ -139,24 +219,58 @@ export default function ChatPage() {
     setTimeout(() => { setCalling(false); setCallStatus(""); }, 7000);
   };
 
-  const playNext = useCallback(() => {
-    if (queueRef.current.length === 0) { playingRef.current = false; return; }
-    playingRef.current = true;
-    const b64 = queueRef.current.shift()!;
-    const bin = atob(b64);
-    const arr = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-    const url = URL.createObjectURL(new Blob([arr], { type: "audio/mp3" }));
-    const a = new Audio(url);
-    audioRef.current = a;
-    a.onended = () => { URL.revokeObjectURL(url); playNext(); };
-    a.play();
+  const stopAudio = useCallback(() => {
+    for (const s of sourcesRef.current) {
+      try { s.stop(); } catch {}
+    }
+    sourcesRef.current = [];
+    playheadRef.current = 0;
+    carryRef.current = new Uint8Array(0);
   }, []);
 
-  const enqueue = useCallback((b64: string) => {
-    queueRef.current.push(b64);
-    if (!playingRef.current) playNext();
-  }, [playNext]);
+  const enqueue = useCallback((b64: string, rate: number) => {
+    const ctx = ctxRef.current;
+    if (!ctx) return;
+    if (ctx.state === "suspended") ctx.resume();
+
+    const bin = atob(b64);
+    const incoming = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) incoming[i] = bin.charCodeAt(i);
+
+    // A frame can end mid-sample; carrying the odd byte keeps every
+    // following chunk byte-aligned instead of degrading into noise.
+    const carry = carryRef.current;
+    const bytes = new Uint8Array(carry.length + incoming.length);
+    bytes.set(carry, 0);
+    bytes.set(incoming, carry.length);
+
+    const samples = bytes.length >> 1;
+    carryRef.current = bytes.length % 2 ? bytes.slice(bytes.length - 1) : new Uint8Array(0);
+    if (samples === 0) return;
+
+    const view = new DataView(bytes.buffer, bytes.byteOffset, samples * 2);
+    const f32 = new Float32Array(samples);
+    for (let i = 0; i < samples; i++) f32[i] = view.getInt16(i * 2, true) / 32768;
+
+    const buf = ctx.createBuffer(1, samples, rate);
+    buf.copyToChannel(f32, 0);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    // Through the gain node so the analyser sees exactly what is audible.
+    src.connect(gainRef.current ?? ctx.destination);
+
+    // A short lead-in on the first chunk absorbs network jitter; after
+    // that each chunk is butted directly against the previous one.
+    const now = ctx.currentTime;
+    if (playheadRef.current < now) playheadRef.current = now + 0.08;
+    src.start(playheadRef.current);
+    playheadRef.current += buf.duration;
+
+    sourcesRef.current.push(src);
+    src.onended = () => {
+      sourcesRef.current = sourcesRef.current.filter((x) => x !== src);
+    };
+  }, []);
 
   const startMic = async (ws: WebSocket) => {
     try {
@@ -170,6 +284,23 @@ export default function ChatPage() {
   };
 
   const startVoice = useCallback(() => {
+    // Built inside the click handler so it counts as a user gesture —
+    // a context created later would stay suspended and play nothing.
+    if (!ctxRef.current) {
+      const ctx = new AudioContext({ sampleRate: 24000 });
+      const gain = ctx.createGain();
+      const an = ctx.createAnalyser();
+      an.fftSize = 256;
+      an.smoothingTimeConstant = 0.6;
+      gain.connect(an);
+      an.connect(ctx.destination);
+      ctxRef.current = ctx;
+      gainRef.current = gain;
+      setAnalyser(an);
+    }
+    ctxRef.current.resume();
+    playheadRef.current = 0;
+
     const base = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
     const ws = new WebSocket(base.replace(/^http/, "ws") + "/ws/voice");
     wsRef.current = ws;
@@ -183,15 +314,37 @@ export default function ChatPage() {
         case "ready": setConversationId(d.conversation_id); setVoiceStatus("Listening"); startMic(ws); break;
         case "transcript_interim": setVoiceStatus(d.text); break;
         case "transcript_final":
+          voiceIdx.current = -1;
           setMessages((p) => [...p, { role: "user", content: d.text, timestamp: new Date().toISOString() }]);
           setVoiceStatus("Thinking…");
           break;
         case "thinking": setVoiceStatus("Thinking…"); break;
-        case "response_text":
-          setMessages((p) => [...p, { role: "assistant", content: d.text, model: d.model }]);
+        case "response_delta":
           setVoiceStatus("Speaking…");
+          setMessages((p) => {
+            const next = [...p];
+            if (voiceIdx.current < 0) {
+              next.push({ role: "assistant", content: d.text, timestamp: new Date().toISOString() });
+              voiceIdx.current = next.length - 1;
+            } else {
+              const i = voiceIdx.current;
+              next[i] = { ...next[i], content: next[i].content + d.text };
+            }
+            return next;
+          });
           break;
-        case "audio": enqueue(d.data); break;
+        case "response_text":
+          // Final tidy-up: the deltas already rendered the text.
+          setMessages((p) => {
+            if (voiceIdx.current < 0) {
+              return [...p, { role: "assistant", content: d.text, model: d.model }];
+            }
+            const next = [...p];
+            next[voiceIdx.current] = { ...next[voiceIdx.current], content: d.text, model: d.model };
+            return next;
+          });
+          break;
+        case "audio": enqueue(d.data, d.rate || 24000); break;
         case "audio_done": setVoiceStatus("Listening"); break;
         case "error": setVoiceStatus(d.message); break;
       }
@@ -200,16 +353,13 @@ export default function ChatPage() {
     setListening(true);
   }, [user, conversationId, enqueue]);
 
-  const stopVoice = () => {
+  const stopVoice = useCallback(() => {
     wsRef.current?.close();
     wsRef.current = null;
-    queueRef.current = [];
-    playingRef.current = false;
-    audioRef.current?.pause();
-    audioRef.current = null;
+    stopAudio();
     setListening(false);
     setVoiceStatus("");
-  };
+  }, [stopAudio]);
 
   const newThread = () => { setMessages([]); setConversationId(null); setShowHistory(false); };
 
@@ -217,12 +367,15 @@ export default function ChatPage() {
     ts ? new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
 
   return (
-    <div className="flex h-full bg-bg">
+    // Transparent so the layout's grid and bloom show through.
+    <div className="flex h-full">
       {/* History rail */}
       {showHistory && (
         <div className="fixed inset-0 z-30 lg:hidden" style={{ background: "var(--scrim)" }} onClick={() => setShowHistory(false)} />
       )}
-      <div className={`${showHistory ? "fixed inset-y-0 left-0 z-30 w-[260px]" : "hidden"} lg:relative lg:flex lg:w-[248px] flex-col bg-bg border-r border-border`}>
+      {/* Opaque only as a mobile overlay; transparent inline on desktop so
+          the grid runs behind it. */}
+      <div className={`${showHistory ? "fixed inset-y-0 left-0 z-30 w-[260px] bg-bg" : "hidden"} lg:relative lg:flex lg:w-[248px] lg:bg-transparent flex-col border-r border-border`}>
         <div className="flex items-center justify-between px-4 h-16 flex-shrink-0">
           <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-text-4">History</span>
           <button onClick={newThread} title="New thread"
@@ -333,7 +486,20 @@ export default function ChatPage() {
               {messages.map((m, i) => (
                 <div key={i} className="rise" style={{ animationDelay: `${Math.min(i * 24, 120)}ms` }}>
                   {m.role === "user" ? (
-                    <div className="flex justify-end">
+                    <div className="flex flex-col items-end gap-1.5">
+                      {m.files && m.files.length > 0 && (
+                        <div className="flex flex-wrap justify-end gap-1.5">
+                          {m.files.map((f) => (
+                            <span key={f.id}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] bg-surface border border-border text-text-3">
+                              {f.kind === "table"
+                                ? <FileSpreadsheet size={12} className="text-accent" />
+                                : <FileText size={12} />}
+                              <span className="max-w-[200px] truncate">{f.filename}</span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
                       <div className="max-w-[80%] rounded-2xl rounded-br-md px-4 py-3 bg-surface-raised border border-border">
                         <div className="text-[14px] leading-[1.65] text-text whitespace-pre-wrap">
                           <RichText text={m.content} />
@@ -366,14 +532,21 @@ export default function ChatPage() {
                 </div>
               ))}
 
-              {loading && (
+              {/* Only show the thinking row before the first token lands —
+                  once text is streaming it speaks for itself. */}
+              {loading && messages[messages.length - 1]?.role !== "assistant" && (
                 <div className="flex gap-3 rise">
                   <div className="flex-shrink-0 mt-0.5"><KaiaMark size={22} orbit={false} /></div>
-                  <div className="flex items-center gap-1.5 pt-2">
-                    {[0, 0.2, 0.4].map((d) => (
-                      <span key={d} className="w-1.5 h-1.5 rounded-full bg-accent"
-                        style={{ animation: `breathe 1.2s ${d}s infinite` }} />
-                    ))}
+                  <div className="flex items-center gap-2 pt-2">
+                    <div className="flex items-center gap-1.5">
+                      {[0, 0.2, 0.4].map((d) => (
+                        <span key={d} className="w-1.5 h-1.5 rounded-full bg-accent"
+                          style={{ animation: `breathe 1.2s ${d}s infinite` }} />
+                      ))}
+                    </div>
+                    {toolRunning && (
+                      <span className="text-[11px] font-mono text-text-4">{toolRunning}</span>
+                    )}
                   </div>
                 </div>
               )}
@@ -386,40 +559,102 @@ export default function ChatPage() {
         <div className="flex-shrink-0 px-6 pb-6 pt-2">
           <div className="max-w-[720px] mx-auto">
             {mode === "text" ? (
-              <div className="flex items-end gap-2 rounded-2xl bg-surface border border-border px-4 py-2 focus-within:border-[var(--accent-ring)] transition-colors">
-                <input
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send()}
-                  placeholder="Message Kaia…"
-                  disabled={loading}
-                  className="flex-1 bg-transparent py-2.5 text-[14px] text-text focus:outline-none"
-                />
-                <button onClick={send} disabled={!input.trim() || loading} aria-label="Send"
-                  className="mb-1 p-2 rounded-lg transition-all press disabled:opacity-30"
-                  style={{
-                    background: input.trim() ? "var(--accent)" : "transparent",
-                    color: input.trim() ? "var(--on-accent)" : "var(--text-4)",
-                  }}>
-                  <ArrowUp size={15} strokeWidth={2.5} />
-                </button>
+              <div>
+                {uploadError && (
+                  <div className="mb-2 text-[12px] px-3 py-2 rounded-lg text-bad" style={{ background: "var(--bad-soft)" }}>
+                    {uploadError}
+                  </div>
+                )}
+
+                {attachments.length > 0 && (
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    {attachments.map((d) => (
+                      <span key={d.id}
+                        className="group inline-flex items-center gap-2 pl-2.5 pr-1.5 py-1.5 rounded-lg text-[12px] bg-surface border border-border text-text-2">
+                        {d.kind === "table"
+                          ? <FileSpreadsheet size={13} className="text-accent" />
+                          : <FileText size={13} className="text-text-3" />}
+                        <span className="max-w-[180px] truncate">{d.filename}</span>
+                        <button onClick={() => detachFile(d.id)} aria-label={`Remove ${d.filename}`}
+                          className="p-0.5 rounded text-text-4 hover:text-bad transition-colors">
+                          <X size={12} />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex items-end gap-2 rounded-2xl bg-surface border border-border px-2 py-2 focus-within:border-[var(--accent-ring)] transition-colors">
+                  <input
+                    ref={fileRef}
+                    type="file"
+                    hidden
+                    accept=".csv,.tsv,.xlsx,.xlsm,.xls,.json,.pdf,.txt,.md"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) attachFile(f);
+                    }}
+                  />
+                  <button onClick={() => fileRef.current?.click()} disabled={uploading}
+                    aria-label="Attach a file" title="Attach a spreadsheet, PDF or text file"
+                    className="mb-0.5 p-2 rounded-lg text-text-4 hover:text-accent hover:bg-surface-hover transition-colors disabled:opacity-40">
+                    {uploading
+                      ? <Loader2 size={16} className="animate-spin" />
+                      : <Paperclip size={16} />}
+                  </button>
+
+                  <input
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send()}
+                    placeholder={attachments.length ? "Ask about the file…" : "Message Kaia…"}
+                    disabled={loading}
+                    className="flex-1 bg-transparent py-2.5 text-[14px] text-text focus:outline-none"
+                  />
+
+                  <button onClick={send} disabled={!input.trim() || loading} aria-label="Send"
+                    className="mb-0.5 p-2 rounded-lg transition-all press disabled:opacity-30"
+                    style={{
+                      background: input.trim() ? "var(--accent)" : "transparent",
+                      color: input.trim() ? "var(--on-accent)" : "var(--text-4)",
+                    }}>
+                    <ArrowUp size={15} strokeWidth={2.5} />
+                  </button>
+                </div>
               </div>
             ) : (
-              <div className="flex flex-col items-center gap-3 py-6">
-                <button onClick={listening ? stopVoice : startVoice}
-                  className="relative p-5 rounded-full transition-all press"
-                  style={{
-                    background: listening ? "var(--bad-soft)" : "var(--surface)",
-                    color: listening ? "var(--bad)" : "var(--accent)",
-                    boxShadow: `0 0 0 1px ${listening ? "var(--bad)" : "var(--border)"}`,
-                  }}>
-                  {listening && (
-                    <span className="absolute inset-0 rounded-full"
-                      style={{ background: "var(--bad)", opacity: 0.15, animation: "breathe 1.6s infinite" }} />
-                  )}
-                  {listening ? <Square size={22} fill="currentColor" /> : <Mic size={22} />}
+              <div className="flex flex-col items-center gap-2 py-2">
+                <button
+                  onClick={listening ? stopVoice : startVoice}
+                  aria-label={listening ? "Stop voice" : "Start voice"}
+                  className="rounded-full transition-transform press focus:outline-none"
+                  style={{ lineHeight: 0 }}
+                >
+                  <VoiceOrb
+                    analyser={analyser}
+                    listening={listening}
+                    size={176}
+                  />
                 </button>
-                <span className="text-[11px] text-text-4">{listening ? "Tap to stop" : "Tap to speak"}</span>
+
+                <div className="flex items-center gap-2 h-5">
+                  {listening ? (
+                    <>
+                      <span className="w-1.5 h-1.5 rounded-full bg-accent"
+                        style={{ animation: "breathe 1.6s infinite" }} />
+                      <span className="text-[12px] text-text-3">{voiceStatus || "Listening"}</span>
+                    </>
+                  ) : (
+                    <span className="text-[12px] text-text-4">Tap the orb to talk</span>
+                  )}
+                </div>
+
+                {listening && (
+                  <button onClick={stopVoice}
+                    className="mt-1 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] text-text-4 hover:text-bad transition-colors">
+                    <Square size={11} fill="currentColor" /> End
+                  </button>
+                )}
               </div>
             )}
           </div>

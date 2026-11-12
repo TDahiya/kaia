@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # Seconds of silence before Kaia fills the gap with "mm-hmm".
     voice_backchannel_after_s: float = 5.0
 
+    # Guest portal
+    guest_cv_path: str = "/opt/kaia/data/cv.pdf"
+    guest_relay_to: str = ""
+
     app_base_url: str = "http://localhost:3000"
     backend_url: str = "http://localhost:8000"
     token_encryption_key: str = ""

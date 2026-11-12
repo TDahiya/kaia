@@ -1,6 +1,7 @@
 """Google OAuth 2.0 — authorization code flow, token storage, refresh."""
 
-from datetime import datetime, timezone
+import logging
+from datetime import datetime, timezone, timedelta
 from urllib.parse import urlencode
 from google.oauth2.credentials import Credentials
 from app.config import get_settings
@@ -8,12 +9,27 @@ from app.database import get_supabase
 from app.encryption import encrypt_token, decrypt_token
 import httpx
 
+logger = logging.getLogger(__name__)
+
 SCOPES = [
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/gmail.modify",
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/documents",
 ]
+
+
+def _parse_expiry(value) -> datetime | None:
+    """Stored ISO timestamp -> naive UTC, which is what google-auth compares."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
 
 
 def get_authorization_url() -> str:
@@ -47,6 +63,14 @@ async def handle_oauth_callback(code: str, user_id: str, org_id: str) -> dict:
     access_token = tokens["access_token"]
     refresh_token = tokens.get("refresh_token")
 
+    # Record when this access token dies. Without it google-auth reports
+    # expired=False forever and the refresh token is never used.
+    expiry = None
+    if tokens.get("expires_in"):
+        expiry = (
+            datetime.now(timezone.utc) + timedelta(seconds=int(tokens["expires_in"]))
+        ).isoformat()
+
     db = get_supabase()
     db.table("integrations").upsert({
         "user_id": user_id,
@@ -54,7 +78,7 @@ async def handle_oauth_callback(code: str, user_id: str, org_id: str) -> dict:
         "provider": "google",
         "access_token_encrypted": encrypt_token(access_token),
         "refresh_token_encrypted": encrypt_token(refresh_token) if refresh_token else None,
-        "token_expiry": None,
+        "token_expiry": expiry,
         "scopes": SCOPES,
         "status": "active",
     }, on_conflict="user_id,provider").execute()
@@ -91,6 +115,8 @@ async def get_google_credentials(user_id: str, org_id: str) -> Credentials | Non
         except ValueError:
             pass
 
+    stored_expiry = _parse_expiry(row.get("token_expiry"))
+
     creds = Credentials(
         token=access_token,
         refresh_token=refresh_token,
@@ -98,19 +124,36 @@ async def get_google_credentials(user_id: str, org_id: str) -> Credentials | Non
         client_id=s.google_client_id,
         client_secret=s.google_client_secret,
         scopes=row.get("scopes") or SCOPES,
+        # google-auth compares this against utcnow, so it must be naive UTC.
+        expiry=stored_expiry,
     )
 
-    if creds.expired and creds.refresh_token:
+    # Refresh when it has expired, when it is about to, or when we simply
+    # don't know — rows written before expiry was stored have no value, and
+    # treating unknown as "still valid" is what let the token go stale.
+    needs_refresh = (
+        stored_expiry is None
+        or creds.expired
+        or stored_expiry <= datetime.utcnow() + timedelta(seconds=120)
+    )
+
+    if needs_refresh and refresh_token:
         try:
             from google.auth.transport.requests import Request
             creds.refresh(Request())
             db.table("integrations").update({
                 "access_token_encrypted": encrypt_token(creds.token),
                 "token_expiry": creds.expiry.isoformat() if creds.expiry else None,
+                "status": "active",
             }).eq("id", row["id"]).execute()
         except Exception:
+            logger.exception("google: refresh failed for user %s", user_id)
             db.table("integrations").update({"status": "expired"}).eq("id", row["id"]).execute()
             return None
+    elif needs_refresh and not refresh_token:
+        # Nothing we can do without a refresh token — the user must reconnect.
+        db.table("integrations").update({"status": "expired"}).eq("id", row["id"]).execute()
+        return None
 
     return creds
 

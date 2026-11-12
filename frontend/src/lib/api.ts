@@ -26,11 +26,57 @@ async function apiFetch(path: string, options: RequestInit = {}): Promise<any> {
 
 export const api = {
   // Chat
-  sendMessage: (message: string, conversationId?: string, agentId?: string) =>
+  sendMessage: (message: string, conversationId?: string, agentId?: string, documentIds: string[] = []) =>
     apiFetch("/api/chat", {
       method: "POST",
-      body: JSON.stringify({ message, conversation_id: conversationId, agent_id: agentId }),
+      body: JSON.stringify({
+        message,
+        conversation_id: conversationId,
+        agent_id: agentId,
+        document_ids: documentIds,
+      }),
     }),
+  /** Streams the reply. `onEvent` fires for each server-sent event. */
+  streamMessage: async (
+    message: string,
+    onEvent: (e: any) => void,
+    conversationId?: string,
+    documentIds: string[] = [],
+  ) => {
+    const token = await getToken();
+    const res = await fetch(`${BACKEND_URL}/api/chat/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        message,
+        conversation_id: conversationId,
+        document_ids: documentIds,
+      }),
+    });
+    if (!res.ok || !res.body) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `Stream failed: ${res.status}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // Events are separated by a blank line; keep any partial tail.
+      const frames = buffer.split("\n\n");
+      buffer = frames.pop() ?? "";
+      for (const frame of frames) {
+        const line = frame.split("\n").find((l) => l.startsWith("data: "));
+        if (!line) continue;
+        try { onEvent(JSON.parse(line.slice(6))); } catch {}
+      }
+    }
+  },
+
   getConversations: (limit = 20) => apiFetch(`/api/chat/conversations?limit=${limit}`),
   getMessages: (conversationId: string) => apiFetch(`/api/chat/conversations/${conversationId}/messages`),
   deleteConversation: (conversationId: string) =>
@@ -66,6 +112,51 @@ export const api = {
   // System
   getSystemStatus: () => apiFetch("/api/system-status"),
   getHealth: () => apiFetch("/api/health"),
+
+  // Guest passes (owner-only)
+  getPasses: () => apiFetch("/api/guest/passes"),
+  createPass: (data: {
+    label: string; days: number; max_messages: number; max_calls: number; note?: string;
+  }) => apiFetch("/api/guest/passes", { method: "POST", body: JSON.stringify(data) }),
+  revokePass: (id: string) => apiFetch(`/api/guest/passes/${id}`, { method: "DELETE" }),
+  getGuestCv: () => apiFetch("/api/guest/cv"),
+  uploadGuestCv: async (file: File) => {
+    const token = await getToken();
+    const body = new FormData();
+    body.append("file", file);
+    const res = await fetch(`${BACKEND_URL}/api/guest/cv`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `Upload failed: ${res.status}`);
+    }
+    return res.json();
+  },
+
+  // Documents
+  uploadDocument: async (file: File, conversationId?: string) => {
+    const token = await getToken();
+    const body = new FormData();
+    body.append("file", file);
+    if (conversationId) body.append("conversation_id", conversationId);
+    // No Content-Type header — the browser sets the multipart boundary.
+    const res = await fetch(`${BACKEND_URL}/api/documents`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `Upload failed: ${res.status}`);
+    }
+    return res.json();
+  },
+  getDocuments: (conversationId: string) =>
+    apiFetch(`/api/documents?conversation_id=${conversationId}`),
+  deleteDocument: (id: string) => apiFetch(`/api/documents/${id}`, { method: "DELETE" }),
 
   // Phone
   getPhoneNumbers: () => apiFetch("/api/telephony/phone-numbers"),
