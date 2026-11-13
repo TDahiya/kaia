@@ -83,10 +83,17 @@ export default function LoginPage() {
             {loading ? "…" : isSignUp ? "Create account" : "Sign in"}
           </button>
 
-          <button type="button" onClick={() => { setIsSignUp(!isSignUp); setNote(""); }}
-            className="w-full text-[12px] text-text-4 hover:text-text-2 transition-colors pt-2">
-            {isSignUp ? "Already have an account? Sign in" : "Create an account"}
-          </button>
+          <div className="flex items-center justify-between pt-2">
+            <button type="button" onClick={() => { setIsSignUp(!isSignUp); setNote(""); }}
+              className="text-[12px] text-text-4 hover:text-text-2 transition-colors">
+              {isSignUp ? "Already have an account? Sign in" : "Create an account"}
+            </button>
+            {!isSignUp && (
+              <a href="/forgot" className="text-[12px] text-text-4 hover:text-accent transition-colors">
+                Forgot password?
+              </a>
+            )}
+          </div>
         </form>
 
         {/* Guests land here by mistake — their code works at /try, not as a password. */}

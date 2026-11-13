@@ -29,3 +29,6 @@ Thumbs.db
 # Caddy data
 caddy_data/
 caddy_config/
+
+# stray clone from a shell that took ~ literally on Windows
+~/
