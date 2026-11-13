@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { ArrowUp, Wrench, Sun, Moon, Phone, X, Check, Paperclip, FileSpreadsheet, FileText, Loader2 } from "lucide-react";
 import { KaiaMark, SceneSignal } from "@/components/brand";
 import { useTheme } from "@/lib/theme-context";
@@ -50,13 +51,11 @@ function RichText({ text }: { text: string }) {
 
 export default function GuestPortal() {
   const { theme, toggle } = useTheme();
+  const router = useRouter();
   const [token, setToken] = useState<string | null>(null);
   const [label, setLabel] = useState("");
   const [remaining, setRemaining] = useState<any>(null);
 
-  const [code, setCode] = useState("");
-  const [gateError, setGateError] = useState("");
-  const [checking, setChecking] = useState(false);
 
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
@@ -124,35 +123,18 @@ export default function GuestPortal() {
   // Resume an existing session so a refresh doesn't burn a message.
   useEffect(() => {
     const saved = localStorage.getItem(STORE);
-    if (!saved) return;
+    if (!saved) {
+      router.replace("/");
+      return;
+    }
     fetch(`${BACKEND}/api/guest/me`, { headers: { Authorization: `Bearer ${saved}` } })
       .then((r) => (r.ok ? r.json() : Promise.reject()))
       .then((d) => { setToken(saved); setLabel(d.label); setRemaining(d.remaining); })
-      .catch(() => localStorage.removeItem(STORE));
-  }, []);
-
-  const redeem = async () => {
-    if (!code.trim()) return;
-    setChecking(true);
-    setGateError("");
-    try {
-      const r = await fetch(`${BACKEND}/api/guest/redeem`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: code.trim() }),
+      .catch(() => {
+        localStorage.removeItem(STORE);
+        router.replace("/");
       });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.detail || "That didn't work.");
-      localStorage.setItem(STORE, d.token);
-      setToken(d.token);
-      setLabel(d.label);
-      setRemaining(d.remaining);
-    } catch (e: any) {
-      setGateError(e.message);
-    } finally {
-      setChecking(false);
-    }
-  };
+  }, [router]);
 
   const send = async (text?: string) => {
     const body = (text ?? input).trim();
@@ -232,52 +214,14 @@ export default function GuestPortal() {
 
   const out = remaining && remaining.messages <= 0;
 
-  /* ── Code gate ── */
+  /* No token? There is exactly one place to enter a code, and it is the
+     front door. Keeping a second form here is how people ended up typing
+     their code into the owner's password field. */
   if (!token) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center px-6">
-        <div className="bloom" />
-        <div className="grid-field" />
-        <button onClick={toggle} aria-label="Toggle theme"
-          className="fixed top-6 right-6 z-10 p-2 rounded-lg text-text-3 hover:text-text">
-          {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
-        </button>
-
-        <div className="relative z-10 w-full max-w-[380px] text-center rise">
-          <div className="flex justify-center"><KaiaMark size={44} /></div>
-          <h1 className="text-[24px] font-semibold tracking-[-0.02em] text-text mt-6">
-            You&apos;ve been given a pass
-          </h1>
-          <p className="text-[14px] text-text-3 mt-3 leading-relaxed">
-            Kaia is Tanishq&apos;s assistant. She can send you his CV, read a job
-            spec and tell you honestly where he fits, or walk you through how any
-            part of this was built.
-          </p>
-
-          <div className="flex gap-2 mt-8">
-            <input
-              value={code}
-              onChange={(e) => { setCode(e.target.value.toUpperCase()); setGateError(""); }}
-              onKeyDown={(e) => e.key === "Enter" && redeem()}
-              placeholder="AMZN-4K2P"
-              autoFocus
-              className="flex-1 bg-control border border-[var(--control-border)] rounded-xl px-4 py-3 text-[15px] font-mono tracking-widest text-center text-text uppercase"
-            />
-            <button onClick={redeem} disabled={checking || !code.trim()}
-              className="px-5 rounded-xl text-sm font-medium press disabled:opacity-40"
-              style={{ background: "var(--accent)", color: "var(--on-accent)" }}>
-              {checking ? "…" : "Enter"}
-            </button>
-          </div>
-
-          {gateError && <p className="text-[13px] text-bad mt-3">{gateError}</p>}
-
-          <p className="text-[12px] text-text-4 mt-8">
-            No code? Email{" "}
-            <a href="mailto:tanishq.dahiya2@mail.dcu.ie" className="text-text-3 hover:text-accent underline underline-offset-2">
-              tanishq.dahiya2@mail.dcu.ie
-            </a>
-          </p>
+      <div className="flex items-center justify-center h-screen bg-bg">
+        <div style={{ animation: "breathe 1.6s ease-in-out infinite" }}>
+          <KaiaMark size={36} />
         </div>
       </div>
     );

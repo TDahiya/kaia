@@ -93,7 +93,7 @@ export default function LoginPage() {
         <div className="mt-10 pt-6 border-t border-border text-center rise" style={{ animationDelay: "120ms" }}>
           <p className="text-[12px] text-text-4">
             Been given an access code?{" "}
-            <a href="/try" className="text-accent hover:underline underline-offset-2">Use it here</a>
+            <a href="/" className="text-accent hover:underline underline-offset-2">Use it here</a>
           </p>
         </div>
       </div>
