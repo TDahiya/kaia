@@ -2,9 +2,10 @@
 
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowUp, Wrench, Sun, Moon, Phone, X, Check, Paperclip, FileSpreadsheet, FileText, Loader2 } from "lucide-react";
+import { ArrowUp, Wrench, Sun, Moon, Phone, X, Check, Paperclip, FileSpreadsheet, FileText, Loader2, LogOut } from "lucide-react";
 import { KaiaMark, SceneSignal } from "@/components/brand";
 import { useTheme } from "@/lib/theme-context";
+import { useAuth } from "@/lib/auth-context";
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
 const STORE = "kaia-guest-token";
@@ -51,6 +52,7 @@ function RichText({ text }: { text: string }) {
 
 export default function GuestPortal() {
   const { theme, toggle } = useTheme();
+  const { user, signOut } = useAuth();
   const router = useRouter();
   const [token, setToken] = useState<string | null>(null);
   const [label, setLabel] = useState("");
@@ -90,6 +92,14 @@ export default function GuestPortal() {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";
     }
+  };
+
+  const leave = async () => {
+    localStorage.removeItem(STORE);
+    if (user) {
+      try { await signOut(); } catch {}
+    }
+    window.location.href = "/";
   };
 
   const [callOpen, setCallOpen] = useState(false);
@@ -326,6 +336,11 @@ export default function GuestPortal() {
           <button onClick={toggle} aria-label="Toggle theme" className="p-1.5 text-text-3 hover:text-text">
             {theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
           </button>
+          <button onClick={leave} title="Leave" aria-label="Leave"
+            className="flex items-center gap-1.5 p-1.5 text-text-3 hover:text-bad transition-colors">
+            <LogOut size={15} />
+            <span className="hidden sm:inline text-[12px]">Leave</span>
+          </button>
         </div>
       </header>
 
@@ -419,6 +434,10 @@ export default function GuestPortal() {
                 </a>{" "}
                 and he&apos;ll reply himself.
               </p>
+              <button onClick={leave}
+                className="mt-3 text-[12px] text-text-4 hover:text-text-2 underline underline-offset-2 transition-colors">
+                Leave
+              </button>
             </div>
           ) : (
             <div>
