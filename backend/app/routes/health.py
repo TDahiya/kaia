@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends
 from app.config import get_settings
-from app.auth import get_current_user
+from app.auth import require_owner
 from app.services import app_settings
 
 router = APIRouter(prefix="/api", tags=["health"])
@@ -14,7 +14,7 @@ async def health():
 
 
 @router.get("/system-status")
-async def system_status(user: dict = Depends(get_current_user)):
+async def system_status(user: dict = Depends(require_owner)):
     s = get_settings()
 
     def check(val: str) -> str:

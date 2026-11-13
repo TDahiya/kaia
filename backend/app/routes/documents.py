@@ -6,7 +6,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 
-from app.auth import get_current_user
+from app.auth import require_owner
 from app.database import get_supabase
 from app.services import documents as docs
 from app.services import exporters
@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/documents", tags=["documents"])
 async def upload_document(
     file: UploadFile = File(...),
     conversation_id: str = Form(None),
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_owner),
 ):
     kind = docs.classify(file.filename or "")
     if kind is None:
@@ -72,7 +72,7 @@ async def upload_document(
 
 
 @router.get("")
-async def list_for_conversation(conversation_id: str, user: dict = Depends(get_current_user)):
+async def list_for_conversation(conversation_id: str, user: dict = Depends(require_owner)):
     return {"documents": docs.list_documents(conversation_id, user["org_id"])}
 
 
@@ -100,7 +100,7 @@ async def download_document(document_id: str, t: str = ""):
 
 
 @router.delete("/{document_id}")
-async def delete_document(document_id: str, user: dict = Depends(get_current_user)):
+async def delete_document(document_id: str, user: dict = Depends(require_owner)):
     doc = docs.get_document(document_id, user["org_id"])
     if not doc:
         raise HTTPException(404, "Document not found")

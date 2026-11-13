@@ -301,11 +301,22 @@ export default function GuestPortal() {
           {label && <span className="hidden sm:inline text-[12px] text-text-4 ml-2">for {label}</span>}
         </div>
         <div className="flex items-center gap-4">
-          {remaining && remaining.calls > 0 && remaining.calls_today_left > 0 && (
-            <button onClick={() => setCallOpen(true)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-text-2 border border-border hover:border-[var(--border-hover)] hover:text-accent transition-colors press">
-              <Phone size={13} /> <span className="hidden sm:inline">Call me</span>
-            </button>
+          {remaining && (
+            remaining.calls > 0 && remaining.calls_today_left > 0 ? (
+              <button onClick={() => setCallOpen(true)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-text-2 border border-border hover:border-[var(--border-hover)] hover:text-accent transition-colors press">
+                <Phone size={13} /> <span className="hidden sm:inline">Call me</span>
+              </button>
+            ) : (
+              /* Shown but inert: a visible locked capability says more about
+                 what this can do than hiding it would. */
+              <span
+                title="Voice calls need an access code from Tanishq"
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs text-text-4 border border-border cursor-not-allowed">
+                <Phone size={13} />
+                <span className="hidden sm:inline">Call me - ask for a code</span>
+              </span>
+            )
           )}
           {remaining && (
             <span className="text-[12px] text-text-3 tnum">

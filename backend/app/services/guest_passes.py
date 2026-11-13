@@ -64,8 +64,23 @@ def list_passes() -> list[dict]:
     return res.data or []
 
 
+def find_by_label(label: str) -> dict | None:
+    res = get_supabase().table("guest_passes").select("*").eq("label", label).execute()
+    return res.data[0] if res.data else None
+
+
+def set_revoked(pass_id: str, revoked: bool) -> None:
+    """Revoke, or put a pass back into service."""
+    get_supabase().table("guest_passes").update({"revoked": revoked}).eq("id", pass_id).execute()
+
+
 def revoke_pass(pass_id: str) -> None:
-    get_supabase().table("guest_passes").update({"revoked": True}).eq("id", pass_id).execute()
+    set_revoked(pass_id, True)
+
+
+def delete_pass(pass_id: str) -> None:
+    """Gone for good. Usage rows cascade with it."""
+    get_supabase().table("guest_passes").delete().eq("id", pass_id).execute()
 
 
 def _fetch(code: str) -> dict | None:

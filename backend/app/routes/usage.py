@@ -1,7 +1,7 @@
 """Usage and cost tracking routes."""
 
 from fastapi import APIRouter, Depends
-from app.auth import get_current_user
+from app.auth import require_owner
 from app.services.usage_tracker import get_monthly_spend
 from app.database import get_supabase
 
@@ -9,13 +9,13 @@ router = APIRouter(prefix="/api/usage", tags=["usage"])
 
 
 @router.get("")
-async def get_usage(user: dict = Depends(get_current_user)):
+async def get_usage(user: dict = Depends(require_owner)):
     spend = await get_monthly_spend(user["org_id"])
     return spend
 
 
 @router.get("/history")
-async def get_usage_history(days: int = 30, user: dict = Depends(get_current_user)):
+async def get_usage_history(days: int = 30, user: dict = Depends(require_owner)):
     from datetime import datetime, timedelta, timezone
     db = get_supabase()
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
@@ -31,7 +31,7 @@ async def get_usage_history(days: int = 30, user: dict = Depends(get_current_use
 
 
 @router.get("/call-logs")
-async def get_call_logs(limit: int = 50, user: dict = Depends(get_current_user)):
+async def get_call_logs(limit: int = 50, user: dict = Depends(require_owner)):
     db = get_supabase()
     result = db.table("call_logs") \
         .select("*") \

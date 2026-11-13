@@ -29,9 +29,17 @@ class Settings(BaseSettings):
     # Seconds of silence before Kaia fills the gap with "mm-hmm".
     voice_backchannel_after_s: float = 5.0
 
+    # Who owns this install. Comma-separated if more than one. Anyone who
+    # signs up outside this list is a guest, never an admin.
+    owner_email: str = "admin@kaia.local"
+
     # Guest portal
     guest_cv_path: str = "/opt/kaia/data/cv.pdf"
     guest_relay_to: str = ""
+
+    # What a signed-in non-owner gets, without needing a code from Tanishq.
+    signup_guest_messages: int = 5
+    signup_guest_calls: int = 0
 
     app_base_url: str = "http://localhost:3000"
     backend_url: str = "http://localhost:8000"

@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
-from app.auth import get_current_user
+from app.auth import require_owner
 from app.database import get_supabase
 from app.services.google_auth import get_authorization_url, handle_oauth_callback, revoke_google
 from app.config import get_settings
@@ -11,7 +11,7 @@ router = APIRouter(prefix="/api/auth", tags=["integrations"])
 
 
 @router.get("/google")
-async def google_auth_start(user: dict = Depends(get_current_user)):
+async def google_auth_start(user: dict = Depends(require_owner)):
     """Returns the Google OAuth URL for the frontend to redirect to."""
     url = get_authorization_url()
     return {"auth_url": url}
@@ -44,7 +44,7 @@ async def google_auth_callback(code: str, request: Request):
 
 
 @router.get("/google/status")
-async def google_status(user: dict = Depends(get_current_user)):
+async def google_status(user: dict = Depends(require_owner)):
     db = get_supabase()
     result = db.table("integrations") \
         .select("status, scopes, updated_at") \
@@ -65,6 +65,6 @@ async def google_status(user: dict = Depends(get_current_user)):
 
 
 @router.post("/google/revoke")
-async def google_revoke(user: dict = Depends(get_current_user)):
+async def google_revoke(user: dict = Depends(require_owner)):
     await revoke_google(user["user_id"], user["org_id"])
     return {"success": True}

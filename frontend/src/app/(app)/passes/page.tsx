@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { api } from "@/lib/api";
-import { Plus, Copy, Check, Ban, ExternalLink, FileText, Upload, AlertTriangle } from "lucide-react";
+import { Plus, Copy, Check, Ban, RotateCcw, Trash2, ExternalLink, FileText, Upload, AlertTriangle } from "lucide-react";
 import { Page, Card, CardTitle, PageHeader, Button, Field, Pill, EmptyState, Spinner } from "@/components/ui";
 import { SceneNodes } from "@/components/brand";
 
@@ -209,16 +209,32 @@ export default function PassesPage() {
                         {copied === p.code ? <Check size={14} /> : <Copy size={14} />}
                       </Button>
                     )}
-                    {!p.revoked && (
+                    {p.revoked ? (
+                      <Button size="sm" title="Put back into service"
+                        onClick={async () => {
+                          await api.setPassRevoked(p.id, false);
+                          load();
+                        }}>
+                        <RotateCcw size={14} />
+                      </Button>
+                    ) : (
                       <Button size="sm" variant="danger" title="Revoke"
                         onClick={async () => {
-                          if (!confirm(`Revoke ${p.code}? It stops working immediately.`)) return;
-                          await api.revokePass(p.id);
+                          if (!confirm(`Revoke ${p.code}? It stops working immediately, but you can resume it later.`)) return;
+                          await api.setPassRevoked(p.id, true);
                           load();
                         }}>
                         <Ban size={14} />
                       </Button>
                     )}
+                    <Button size="sm" variant="danger" title="Delete permanently"
+                      onClick={async () => {
+                        if (!confirm(`Delete ${p.code} permanently? This removes it and its usage history from the database and cannot be undone.`)) return;
+                        await api.deletePass(p.id);
+                        load();
+                      }}>
+                      <Trash2 size={14} />
+                    </Button>
                   </div>
                 </div>
               </Card>

@@ -113,12 +113,21 @@ export const api = {
   getSystemStatus: () => apiFetch("/api/system-status"),
   getHealth: () => apiFetch("/api/health"),
 
+  /** Is the signed-in user the owner? Decided by the backend, never the client. */
+  whoAmI: () => apiFetch("/api/system-status").then(() => true).catch(() => false),
+
+  /** A signed-in non-owner gets a small guest pass instead of a 403 wall. */
+  signupPass: () => apiFetch("/api/guest/signup-pass", { method: "POST" }),
+
   // Guest passes (owner-only)
   getPasses: () => apiFetch("/api/guest/passes"),
   createPass: (data: {
     label: string; days: number; max_messages: number; max_calls: number; note?: string;
   }) => apiFetch("/api/guest/passes", { method: "POST", body: JSON.stringify(data) }),
-  revokePass: (id: string) => apiFetch(`/api/guest/passes/${id}`, { method: "DELETE" }),
+  setPassRevoked: (id: string, revoked: boolean) =>
+    apiFetch(`/api/guest/passes/${id}?revoked=${revoked}`, { method: "PATCH" }),
+  deletePass: (id: string) =>
+    apiFetch(`/api/guest/passes/${id}?hard=true`, { method: "DELETE" }),
   getGuestCv: () => apiFetch("/api/guest/cv"),
   uploadGuestCv: async (file: File) => {
     const token = await getToken();

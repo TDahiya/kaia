@@ -11,7 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException, Header, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app.auth import get_current_user
+from app.auth import require_owner, get_current_user
+from app.config import get_settings
 from app.services import guest_passes as passes
 from app.services.ai_brain import (
     get_async_openai, get_model_id, ModelTier, _convert_tools_for_openai,
@@ -138,6 +139,40 @@ async def redeem(body: RedeemBody):
 async def me(authorization: str | None = Header(None)):
     p = _pass_from_header(authorization)
     return {"label": p["label"], "remaining": passes.remaining(p)}
+
+
+@router.post("/signup-pass")
+async def signup_pass(user: dict = Depends(get_current_user)):
+    """A signed-in non-owner gets a small pass automatically.
+
+    They registered through Supabase, which is public, so rather than a
+    bare 403 they land in the guest portal with a few messages. Calls stay
+    at zero — those cost real money and need a code from Tanishq.
+    """
+    if user.get("is_owner"):
+        raise HTTPException(400, "The owner doesn't need a guest pass.")
+
+    email = (user.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(400, "No email on this account.")
+
+    s = get_settings()
+    existing = passes.find_by_label(f"signup:{email}")
+    row = existing or passes.create_pass(
+        label=f"signup:{email}",
+        days=30,
+        max_messages=s.signup_guest_messages,
+        max_calls=s.signup_guest_calls,
+        note="Created automatically on sign-up",
+    )
+    if row["revoked"]:
+        raise HTTPException(403, "Your access has been revoked.")
+
+    return {
+        "token": passes.issue_session(row["id"]),
+        "label": email,
+        "remaining": passes.remaining(row),
+    }
 
 
 @router.post("/chat")
@@ -290,7 +325,7 @@ class CreatePassBody(BaseModel):
 
 
 @router.get("/passes")
-async def list_passes(user: dict = Depends(get_current_user)):
+async def list_passes(user: dict = Depends(require_owner)):
     return {"passes": passes.list_passes(), "limits": {
         "daily_calls": passes.DAILY_CALL_CEILING,
         "daily_messages": passes.DAILY_MESSAGE_CEILING,
@@ -298,7 +333,7 @@ async def list_passes(user: dict = Depends(get_current_user)):
 
 
 @router.post("/passes")
-async def create_pass(body: CreatePassBody, user: dict = Depends(get_current_user)):
+async def create_pass(body: CreatePassBody, user: dict = Depends(require_owner)):
     if not body.label.strip():
         raise HTTPException(400, "Give it a label so you know who it went to.")
     return {"pass": passes.create_pass(
@@ -311,10 +346,21 @@ async def create_pass(body: CreatePassBody, user: dict = Depends(get_current_use
     )}
 
 
+@router.patch("/passes/{pass_id}")
+async def set_pass_state(pass_id: str, revoked: bool, user: dict = Depends(require_owner)):
+    """Revoke a pass, or put it back into service."""
+    passes.set_revoked(pass_id, revoked)
+    return {"success": True, "revoked": revoked}
+
+
 @router.delete("/passes/{pass_id}")
-async def revoke(pass_id: str, user: dict = Depends(get_current_user)):
+async def delete_pass(pass_id: str, hard: bool = False, user: dict = Depends(require_owner)):
+    """Revoke by default; `hard=true` removes the row entirely."""
+    if hard:
+        passes.delete_pass(pass_id)
+        return {"success": True, "deleted": True}
     passes.revoke_pass(pass_id)
-    return {"success": True}
+    return {"success": True, "deleted": False}
 
 
 GUEST_UPLOAD_LIMIT = 3
@@ -416,13 +462,13 @@ async def request_callback(body: CallbackBody, authorization: str | None = Heade
 
 
 @router.get("/cv")
-async def cv_status(user: dict = Depends(get_current_user)):
+async def cv_status(user: dict = Depends(require_owner)):
     from app.services.guest_cv import cv_status as status
     return status()
 
 
 @router.post("/cv")
-async def upload_cv(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+async def upload_cv(file: UploadFile = File(...), user: dict = Depends(require_owner)):
     """One upload serves two jobs: the PDF that gets emailed, and the text
     the knowledge tools read. A CV fits in context whole, so there is no
     chunking or retrieval — the model sees all of it."""

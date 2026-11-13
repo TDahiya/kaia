@@ -4,7 +4,7 @@ import json
 from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from app.auth import get_current_user
+from app.auth import require_owner
 from app.database import get_supabase
 from app.services.ai_brain import (
     chat_with_tools, build_system_prompt, ModelTier,
@@ -172,7 +172,7 @@ async def _prepare_turn(req: ChatRequest, user: dict):
 
 
 @router.post("/stream")
-async def stream_message(req: ChatRequest, user: dict = Depends(get_current_user)):
+async def stream_message(req: ChatRequest, user: dict = Depends(require_owner)):
     """Server-sent events: text arrives as the model writes it."""
     turn = await _prepare_turn(req, user)
 
@@ -282,7 +282,7 @@ async def stream_message(req: ChatRequest, user: dict = Depends(get_current_user
 
 
 @router.post("", response_model=ChatResponse)
-async def send_message(req: ChatRequest, user: dict = Depends(get_current_user)):
+async def send_message(req: ChatRequest, user: dict = Depends(require_owner)):
     org_id = user["org_id"]
     user_id = user["user_id"]
 
@@ -415,7 +415,7 @@ async def send_message(req: ChatRequest, user: dict = Depends(get_current_user))
 
 
 @router.get("/conversations")
-async def list_conversations(limit: int = 20, user: dict = Depends(get_current_user)):
+async def list_conversations(limit: int = 20, user: dict = Depends(require_owner)):
     db = get_supabase()
     result = db.table("conversations") \
         .select("id, title, mode, started_at, ended_at") \
@@ -427,7 +427,7 @@ async def list_conversations(limit: int = 20, user: dict = Depends(get_current_u
 
 
 @router.get("/conversations/{conversation_id}/messages")
-async def get_messages(conversation_id: str, user: dict = Depends(get_current_user)):
+async def get_messages(conversation_id: str, user: dict = Depends(require_owner)):
     db = get_supabase()
     # Verify ownership
     conv = db.table("conversations").select("id").eq("id", conversation_id).eq("org_id", user["org_id"]).execute()
@@ -443,7 +443,7 @@ async def get_messages(conversation_id: str, user: dict = Depends(get_current_us
 
 
 @router.delete("/conversations/{conversation_id}")
-async def delete_conversation(conversation_id: str, user: dict = Depends(get_current_user)):
+async def delete_conversation(conversation_id: str, user: dict = Depends(require_owner)):
     db = get_supabase()
     conv = db.table("conversations").select("id").eq("id", conversation_id).eq("org_id", user["org_id"]).execute()
     if not conv.data:

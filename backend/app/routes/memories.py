@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from app.auth import get_current_user
+from app.auth import require_owner
 from app.database import get_supabase
 from app.services.memory_summarizer import run_weekly_summary
 
@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/memories", tags=["memories"])
 @router.get("")
 async def list_memories(
     category: str = "", active_only: bool = True, limit: int = 50,
-    user: dict = Depends(get_current_user),
+    user: dict = Depends(require_owner),
 ):
     db = get_supabase()
     q = db.table("memories") \
@@ -35,7 +35,7 @@ class MemoryCreate(BaseModel):
 
 
 @router.post("")
-async def create_memory(req: MemoryCreate, user: dict = Depends(get_current_user)):
+async def create_memory(req: MemoryCreate, user: dict = Depends(require_owner)):
     db = get_supabase()
     result = db.table("memories").insert({
         "org_id": user["org_id"],
@@ -56,7 +56,7 @@ class MemoryUpdate(BaseModel):
 
 
 @router.patch("/{memory_id}")
-async def update_memory(memory_id: str, req: MemoryUpdate, user: dict = Depends(get_current_user)):
+async def update_memory(memory_id: str, req: MemoryUpdate, user: dict = Depends(require_owner)):
     db = get_supabase()
     updates = {k: v for k, v in req.model_dump().items() if v is not None}
     if not updates:
@@ -68,14 +68,14 @@ async def update_memory(memory_id: str, req: MemoryUpdate, user: dict = Depends(
 
 
 @router.delete("/{memory_id}")
-async def delete_memory(memory_id: str, user: dict = Depends(get_current_user)):
+async def delete_memory(memory_id: str, user: dict = Depends(require_owner)):
     db = get_supabase()
     db.table("memories").update({"is_active": False}).eq("id", memory_id).eq("org_id", user["org_id"]).execute()
     return {"success": True}
 
 
 @router.get("/summaries")
-async def list_summaries(limit: int = 10, user: dict = Depends(get_current_user)):
+async def list_summaries(limit: int = 10, user: dict = Depends(require_owner)):
     db = get_supabase()
     result = db.table("weekly_summaries") \
         .select("*") \
@@ -87,7 +87,7 @@ async def list_summaries(limit: int = 10, user: dict = Depends(get_current_user)
 
 
 @router.post("/summarize-now")
-async def trigger_summarize(user: dict = Depends(get_current_user)):
+async def trigger_summarize(user: dict = Depends(require_owner)):
     if user["role"] != "admin":
         raise HTTPException(403, "Admin only")
     result = await run_weekly_summary(user["user_id"], user["org_id"])

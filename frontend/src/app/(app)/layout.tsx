@@ -1,6 +1,7 @@
 "use client";
 
 import { useAuth } from "@/lib/auth-context";
+import { api } from "@/lib/api";
 import { Sidebar } from "@/components/sidebar";
 import { KaiaMark } from "@/components/brand";
 import { useRouter } from "next/navigation";
@@ -11,12 +12,38 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const { user, loading } = useAuth();
   const router = useRouter();
   const [navOpen, setNavOpen] = useState(false);
+  const [allowed, setAllowed] = useState<boolean | null>(null);
 
   useEffect(() => {
-    if (!loading && !user) router.push("/login");
+    if (loading) return;
+    if (!user) {
+      router.replace("/login");
+      return;
+    }
+
+    // Being signed in is not the same as owning this. Supabase sign-up is
+    // public, so the backend decides — anyone else is handed a guest pass
+    // and sent to the portal rather than into the dashboard.
+    let cancelled = false;
+    api.whoAmI().then(async (isOwner) => {
+      if (cancelled) return;
+      if (isOwner) {
+        setAllowed(true);
+        return;
+      }
+      setAllowed(false);
+      try {
+        const pass = await api.signupPass();
+        localStorage.setItem("kaia-guest-token", pass.token);
+      } catch {
+        // No pass to be had — the front door explains what to do.
+      }
+      router.replace("/try");
+    });
+    return () => { cancelled = true; };
   }, [user, loading, router]);
 
-  if (loading) {
+  if (loading || (user && allowed === null) || allowed === false) {
     return (
       <div className="flex items-center justify-center h-screen bg-bg">
         <div style={{ animation: "breathe 1.6s ease-in-out infinite" }}>

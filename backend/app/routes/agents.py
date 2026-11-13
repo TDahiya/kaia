@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from app.auth import get_current_user
+from app.auth import require_owner
 from app.database import get_supabase
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
@@ -36,7 +36,7 @@ class AgentUpdate(BaseModel):
 
 
 @router.get("")
-async def list_agents(user: dict = Depends(get_current_user)):
+async def list_agents(user: dict = Depends(require_owner)):
     db = get_supabase()
     result = db.table("agents") \
         .select("*") \
@@ -47,7 +47,7 @@ async def list_agents(user: dict = Depends(get_current_user)):
 
 
 @router.post("")
-async def create_agent(req: AgentCreate, user: dict = Depends(get_current_user)):
+async def create_agent(req: AgentCreate, user: dict = Depends(require_owner)):
     db = get_supabase()
     result = db.table("agents").insert({
         "org_id": user["org_id"],
@@ -57,7 +57,7 @@ async def create_agent(req: AgentCreate, user: dict = Depends(get_current_user))
 
 
 @router.get("/{agent_id}")
-async def get_agent(agent_id: str, user: dict = Depends(get_current_user)):
+async def get_agent(agent_id: str, user: dict = Depends(require_owner)):
     db = get_supabase()
     result = db.table("agents").select("*").eq("id", agent_id).eq("org_id", user["org_id"]).single().execute()
     if not result.data:
@@ -66,7 +66,7 @@ async def get_agent(agent_id: str, user: dict = Depends(get_current_user)):
 
 
 @router.patch("/{agent_id}")
-async def update_agent(agent_id: str, req: AgentUpdate, user: dict = Depends(get_current_user)):
+async def update_agent(agent_id: str, req: AgentUpdate, user: dict = Depends(require_owner)):
     db = get_supabase()
     updates = {k: v for k, v in req.model_dump().items() if v is not None}
     if not updates:
@@ -82,14 +82,14 @@ async def update_agent(agent_id: str, req: AgentUpdate, user: dict = Depends(get
 
 
 @router.delete("/{agent_id}")
-async def delete_agent(agent_id: str, user: dict = Depends(get_current_user)):
+async def delete_agent(agent_id: str, user: dict = Depends(require_owner)):
     db = get_supabase()
     db.table("agents").delete().eq("id", agent_id).eq("org_id", user["org_id"]).execute()
     return {"success": True}
 
 
 @router.post("/{agent_id}/clone")
-async def clone_agent(agent_id: str, user: dict = Depends(get_current_user)):
+async def clone_agent(agent_id: str, user: dict = Depends(require_owner)):
     db = get_supabase()
     source = db.table("agents").select("*").eq("id", agent_id).eq("org_id", user["org_id"]).single().execute()
     if not source.data:
