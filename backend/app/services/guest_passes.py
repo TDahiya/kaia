@@ -210,10 +210,16 @@ def record(pass_id: str, kind: str, detail: str = "", cost_usd: float = 0.0) -> 
 
 
 def remaining(pass_row: dict) -> dict:
+    """What is left, including how long — a visitor should be able to see
+    that without having to ask."""
+    expires = datetime.fromisoformat(str(pass_row["expires_at"]).replace("Z", "+00:00"))
+    hours_left = max(0, int((expires - datetime.now(timezone.utc)).total_seconds() // 3600))
     return {
         "messages": max(0, pass_row["max_messages"] - pass_row["used_messages"]),
         "calls": max(0, pass_row["max_calls"] - pass_row["used_calls"]),
         "calls_today_left": max(0, DAILY_CALL_CEILING - _count_today("call")),
+        "hours_left": hours_left,
+        "expires_at": str(pass_row["expires_at"]),
     }
 
 

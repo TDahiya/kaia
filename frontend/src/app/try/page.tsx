@@ -335,7 +335,15 @@ export default function GuestPortal() {
           )}
           {remaining && (
             <span className="text-[12px] text-text-3 tnum">
-              {remaining.messages} message{remaining.messages === 1 ? "" : "s"} left
+              {remaining.messages} message{remaining.messages === 1 ? "" : "s"}
+              {typeof remaining.hours_left === "number" && (
+                <span className="text-text-4">
+                  {" · "}
+                  {remaining.hours_left >= 48
+                    ? `${Math.round(remaining.hours_left / 24)} days left`
+                    : `${remaining.hours_left}h left`}
+                </span>
+              )}
             </span>
           )}
           <button onClick={toggle} aria-label="Toggle theme" className="p-1.5 text-text-3 hover:text-text">

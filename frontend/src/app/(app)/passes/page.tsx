@@ -59,10 +59,32 @@ export default function PassesPage() {
     load();
   };
 
-  const copyInvite = (code: string) => {
-    const text = `Here's your access code for Kaia — ${code}\n\n${SITE}/try\n\nIt's good for 24 hours. She can send you my CV, talk through how any of it was built, or read a job spec and tell you honestly where I fit.`;
+  /* The message has to describe the pass you actually issued. It used to
+     say "24 hours" whatever the expiry was, so a 7-day code went out
+     telling people it died tomorrow. */
+  const validFor = (iso: string) => {
+    const ms = new Date(iso).getTime() - Date.now();
+    if (ms <= 0) return "expired";
+    const hours = Math.round(ms / 3_600_000);
+    if (hours < 36) return `good for ${hours} hour${hours === 1 ? "" : "s"}`;
+    return `good for ${Math.round(hours / 24)} days`;
+  };
+
+  const copyInvite = (p: any) => {
+    const calls = p.max_calls > 0
+      ? ` and ${p.max_calls} phone call${p.max_calls === 1 ? "" : "s"}.`
+      : ".";
+    const text = [
+      `Here's your access code for Kaia — ${p.code}`,
+      "",
+      SITE,
+      "",
+      `It's ${validFor(p.expires_at)} and covers ${p.max_messages} messages${calls}`,
+      "",
+      "She can email you my CV, read a job spec and tell you honestly where I fit, book time with me directly, or walk you through how any of it was built.",
+    ].join("\n");
     navigator.clipboard.writeText(text);
-    setCopied(code);
+    setCopied(p.code);
     setTimeout(() => setCopied(""), 2000);
   };
 
@@ -193,7 +215,14 @@ export default function PassesPage() {
                         : <Pill tone={left.dead ? "bad" : "ok"}>{left.text}</Pill>}
                       {!p.first_used_at && !dead && <Pill>unused</Pill>}
                     </div>
-                    <div className="text-[13px] text-text-2 mt-2">{p.label}</div>
+                    <div className="text-[13px] text-text-2 mt-2 flex items-center gap-2">
+                      {p.label?.startsWith("signup:") ? (
+                        <>
+                          <span>{p.label.slice(7)}</span>
+                          <Pill>signed up</Pill>
+                        </>
+                      ) : p.label}
+                    </div>
                     {p.note && <div className="text-[12px] text-text-4 mt-1">{p.note}</div>}
                     <div className="flex flex-wrap gap-4 mt-3 text-[11px] text-text-4 tnum">
                       <span>{p.used_messages}/{p.max_messages} messages</span>
@@ -204,7 +233,7 @@ export default function PassesPage() {
 
                   <div className="flex items-center gap-1 flex-shrink-0">
                     {!dead && (
-                      <Button size="sm" onClick={() => copyInvite(p.code)}
+                      <Button size="sm" onClick={() => copyInvite(p)}
                         title="Copy the invite message">
                         {copied === p.code ? <Check size={14} /> : <Copy size={14} />}
                       </Button>
