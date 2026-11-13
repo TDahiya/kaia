@@ -16,7 +16,10 @@ if not logger.handlers:
     logger.addHandler(logging.StreamHandler())
 from app.config import get_settings
 from app.database import get_supabase
-from app.services.ai_brain import chat_with_tools, build_system_prompt, ModelTier, get_async_openai, get_model_id, _convert_tools_for_openai
+from app.services.ai_brain import (
+    chat_with_tools, build_system_prompt, ModelTier, get_async_openai,
+    get_model_id, _convert_tools_for_openai, completion_params,
+)
 from app.services.tool_registry import registry
 from app.services.usage_tracker import track_stt_usage, track_tts_usage
 import httpx
@@ -245,8 +248,9 @@ Calendar, email, CRM, weather, maps, memory. Use them — don't describe them.""
         try:
             for _turn in range(5):
                 stream = await client.chat.completions.create(
-                    model=model, messages=oai_msgs, max_tokens=VOICE_MAX_TOKENS,
+                    model=model, messages=oai_msgs,
                     tools=oai_tools, stream=True,
+                    **completion_params(model, VOICE_MAX_TOKENS, has_tools=bool(oai_tools)),
                 )
 
                 text = ""
@@ -673,8 +677,9 @@ Calendar, email, CRM, weather, maps, memory. Use them — don't describe them.""
         try:
             for _turn in range(5):
                 stream = await client.chat.completions.create(
-                    model=model, messages=oai_msgs, max_tokens=VOICE_MAX_TOKENS,
+                    model=model, messages=oai_msgs,
                     tools=oai_tools, stream=True,
+                    **completion_params(model, VOICE_MAX_TOKENS, has_tools=bool(oai_tools)),
                 )
                 text = ""
                 sbuf = ""

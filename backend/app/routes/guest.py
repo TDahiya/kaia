@@ -13,7 +13,10 @@ from pydantic import BaseModel
 
 from app.auth import get_current_user
 from app.services import guest_passes as passes
-from app.services.ai_brain import get_async_openai, get_model_id, ModelTier, _convert_tools_for_openai
+from app.services.ai_brain import (
+    get_async_openai, get_model_id, ModelTier, _convert_tools_for_openai,
+    completion_params,
+)
 from app.services.tools.guest_tools import guest_registry
 
 logger = logging.getLogger(__name__)
@@ -177,8 +180,8 @@ async def guest_chat(body: GuestChatBody, authorization: str | None = Header(Non
         try:
             for _ in range(5):
                 stream = await client.chat.completions.create(
-                    model=model, messages=msgs, tools=tools,
-                    max_tokens=GUEST_MAX_TOKENS, stream=True,
+                    model=model, messages=msgs, tools=tools, stream=True,
+                    **completion_params(model, GUEST_MAX_TOKENS, has_tools=True),
                 )
                 text = ""
                 tc_map: dict[int, dict] = {}
@@ -253,7 +256,7 @@ async def guest_chat(body: GuestChatBody, authorization: str | None = Header(Non
                         "role": "user",
                         "content": "Answer now in plain words using what the tools returned. Do not call any more tools.",
                     }],
-                    max_tokens=GUEST_MAX_TOKENS, stream=True,
+                    stream=True, **completion_params(model, GUEST_MAX_TOKENS),
                 )
                 async for chunk in final:
                     c = chunk.choices[0] if chunk.choices else None

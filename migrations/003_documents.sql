@@ -17,5 +17,6 @@ create index if not exists documents_conversation_idx on documents(conversation_
 
 alter table documents enable row level security;
 
+drop policy if exists documents_service_role on documents;
 create policy documents_service_role on documents
     for all using (auth.role() = 'service_role');

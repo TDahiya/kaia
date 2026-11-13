@@ -41,6 +41,29 @@ class ModelTier(str, Enum):
     PREMIUM = "premium"
 
 
+# Model families disagree about request parameters. Every call site goes
+# through completion_params() so a new family is handled in one place
+# instead of four — getting this wrong 400s every request in the app.
+REASONING_FAMILIES = ("gpt-6", "gpt-5.6")
+
+
+def completion_params(model: str, max_tokens: int, has_tools: bool = False) -> dict:
+    """Per-family request parameters, normalised.
+
+    gpt-6 renamed `max_tokens` to `max_completion_tokens`, and on
+    /v1/chat/completions it refuses function tools unless reasoning is
+    switched off — the API says to use /v1/responses otherwise. Reasoning
+    off is the right trade here anyway: Kaia is latency-bound, and
+    gpt-6-luna answers in 0.55s against gpt-4o-mini's 1.07s.
+    """
+    if model.startswith(REASONING_FAMILIES):
+        params: dict = {"max_completion_tokens": max_tokens}
+        if has_tools:
+            params["reasoning_effort"] = "none"
+        return params
+    return {"max_tokens": max_tokens}
+
+
 COMPLEXITY_KEYWORDS_STANDARD = {
     "plan", "analyze", "compare", "research", "summarize email",
     "draft email", "schedule", "create event", "write report",
@@ -181,8 +204,8 @@ async def chat(
 
     kwargs: dict = {
         "model": model,
-        "max_tokens": max_tokens,
         "messages": openai_messages,
+        **completion_params(model, max_tokens, has_tools=bool(tools)),
     }
     if tools:
         kwargs["tools"] = _convert_tools_for_openai(tools)

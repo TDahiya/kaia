@@ -9,6 +9,7 @@ from app.database import get_supabase
 from app.services.ai_brain import (
     chat_with_tools, build_system_prompt, ModelTier,
     get_async_openai, get_model_id, classify_complexity, _convert_tools_for_openai,
+    completion_params,
 )
 from app.services.tool_registry import registry
 from app.services.usage_tracker import check_spend_limit
@@ -195,6 +196,7 @@ async def stream_message(req: ChatRequest, user: dict = Depends(get_current_user
                 stream = await client.chat.completions.create(
                     model=model, messages=oai_msgs, tools=oai_tools,
                     stream=True, stream_options={"include_usage": True},
+                    **completion_params(model, 1500, has_tools=True),
                 )
 
                 text = ""

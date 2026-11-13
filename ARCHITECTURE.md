@@ -1,108 +1,176 @@
-# Kaia — Architecture
+# Architecture
 
-## System Overview
+How Kaia is put together, and why the awkward parts are the way they are.
+
+---
+
+## The shape of it
 
 ```
-Browser ──► Next.js (3000) ──► FastAPI (8000) ──► Claude API
-                │                    │               │
-                │                    ├── Deepgram STT/TTS
-                │                    ├── Google APIs
-                │                    ├── Telnyx Call Control
-                │                    └── OpenWeatherMap
-                │                    │
-                └── Supabase Auth ◄──┴── Supabase PostgreSQL
+                    ┌───────────────────────────────┐
+                    │  Next.js 16  (frontend)       │
+                    │                               │
+                    │  /overview /chat /agents ...  │  signed-in dashboard
+                    │  /try                         │  code-gated guest portal
+                    │  /login                       │
+                    └───────┬───────────────┬───────┘
+                            │ HTTP + SSE    │ WebSocket
+                            v               v
+                    ┌───────────────────────────────┐
+                    │  FastAPI  (backend)           │
+                    │                               │
+   routes/          │  chat   voice   guest         │
+                    │  documents  telephony  agents │
+                    ├───────────────────────────────┤
+   services/        │  ai_brain      tool_registry  │
+                    │  documents     guest_passes   │
+                    │  google_auth   exporters      │
+                    └───┬────┬────┬────┬────┬───────┘
+                        │    │    │    │    │
+             OpenAI ◄───┘    │    │    │    └──► subprocess
+           Deepgram ◄────────┘    │    │         (pandas sandbox,
+             Twilio ◄─────────────┘    │          unprivileged user)
+           Supabase ◄──────────────────┘
+          (Postgres + auth + RLS)
 ```
 
-## Backend (`backend/`)
+Two separate surfaces share one backend:
 
-**FastAPI + Python 3.12**
+- **The dashboard** is the owner's. Full tool registry, full history.
+- **The guest portal** is for people given an access code. Separate
+  registry, separate prompt, metered quota. It cannot reach the owner's
+  tools, memories, documents or calendar.
 
-- `app/main.py` — App entrypoint, lifespan, CORS, router wiring, APScheduler for weekly summarization
-- `app/config.py` — Pydantic Settings loaded from `.env`
-- `app/auth.py` — Supabase JWT validation middleware
-- `app/database.py` — Supabase client (service_role and anon)
-- `app/encryption.py` — Fernet encryption for OAuth token storage
+---
 
-### Services
+## A request, end to end
 
-- `services/ai_brain.py` — Model routing (Haiku/Sonnet/Opus), complexity classification, tool loop with loop detection
-- `services/tool_registry.py` — Extensible tool registry with categories
-- `services/usage_tracker.py` — Per-provider cost tracking (LLM, STT, TTS, telephony)
-- `services/google_auth.py` — OAuth 2.0 flow, token encryption/refresh
-- `services/memory_summarizer.py` — Weekly conversation digest → durable memories
+Text chat, `POST /api/chat/stream`:
 
-### Tools (`services/tools/`)
+1. `_prepare_turn` resolves the conversation, adopts any attachments,
+   stores the user message, and assembles the prompt from the agent's
+   instructions, stored memories, and a list of attached files.
+2. `classify_complexity` picks a model tier from the message.
+3. The handler streams from OpenAI. Text deltas go straight out as SSE,
+   so the UI renders as the model writes.
+4. If the model calls a tool, the registry executes it, the result is
+   appended, and the loop runs again — up to six times.
+5. The finished reply is stored and a `done` event carries the model,
+   token counts and which tools ran.
 
-| Tool | Category | Confirmation Required |
-|------|----------|----------------------|
-| `get_weather` | Weather | No |
-| `search_memories` | Memory | No |
-| `add_memory` | Memory | No |
-| `update_memory` | Memory | No |
-| `delete_memory` | Memory | No |
-| `list_calendar_events` | Google Calendar | No |
-| `check_calendar_availability` | Google Calendar | No |
-| `create_calendar_event` | Google Calendar | Yes |
-| `cancel_calendar_event` | Google Calendar | Yes |
-| `search_emails` | Gmail | No |
-| `read_email` | Gmail | No |
-| `create_email_draft` | Gmail | No |
-| `send_email` | Gmail | Yes |
-| `crm_add_or_update_contact` | Sheets CRM | No |
-| `crm_search_contacts` | Sheets CRM | No |
-| `call_owner` | Phone | Yes |
+Voice follows the same shape with speech on both ends. The notable
+difference is that text deltas are also pushed into a **live TTS socket**
+as they arrive, so speech starts before the model has finished writing.
 
-### Routes
+---
 
-- `/api/chat` — Text chat with tool loop
-- `/api/agents` — Agent CRUD + clone
-- `/api/memories` — Memory management + manual summarize
-- `/api/usage` — Cost tracking + call logs
-- `/api/auth/google` — OAuth flow
-- `/api/telephony/webhook` — Telnyx webhook handler
-- `/api/health`, `/api/system-status`
-- `/ws/voice` — Browser voice (Deepgram streaming)
-- `/ws/call-media` — Phone voice (Telnyx media → Deepgram)
+## Decisions worth explaining
 
-## Frontend (`frontend/`)
+### Spreadsheets do not go through a vector database
 
-**Next.js 15 + TypeScript + Tailwind CSS v4**
+The obvious design is to embed an uploaded spreadsheet and retrieve
+chunks. It is wrong, and the failure is quiet: retrieval returns text
+that *looks* like an answer. Ask for "total spend over 5,000" and the
+model receives a handful of rows and produces a confident, invented
+number.
 
-- `lib/supabase.ts` — Browser Supabase client
-- `lib/api.ts` — Typed API client with auth token injection
-- `lib/auth-context.tsx` — React auth context (user/session/loading)
-- `components/sidebar.tsx` — Navigation with 10 routes
+So tabular files skip retrieval entirely. The model inspects the real
+schema, writes pandas, and the code runs against the actual file in a
+subprocess. The figure is computed, not recalled. Prose still uses
+retrieval, because prose genuinely does chunk well.
 
-### Pages
+### The sandbox, and what it is actually for
 
-| Route | Description |
-|-------|-------------|
-| `/login` | Auth (sign in / sign up) |
-| `/dashboard` | Overview cards, status, cost breakdown |
-| `/dashboard/chat` | Unified text + voice chat |
-| `/dashboard/agents` | Agent list with create/clone/delete |
-| `/dashboard/agents/[id]` | Agent editor |
-| `/dashboard/memories` | Memory browser + weekly summaries |
-| `/dashboard/voice` | Voice info (links to chat) |
-| `/dashboard/phone` | Phone config + call history |
-| `/dashboard/usage` | Spend tracking + provider breakdown |
-| `/dashboard/settings` | Google OAuth + system config |
-| `/dashboard/tools` | Tool registry display |
-| `/dashboard/knowledge` | Knowledge base info |
+`services/sandbox_runner.py` is executed as a subprocess, never
+imported. It runs with `python -I` (no env, no cwd on the import path),
+an empty working directory, and rlimits on CPU, address space, file size
+and process count.
 
-## Database (Supabase PostgreSQL)
+For guest-supplied files it additionally drops to an unprivileged user,
+because the API process runs as root and otherwise model-written code
+could read `backend/.env`. Verified behaviour: a runaway loop is killed
+by the CPU limit, a 4GB allocation raises `MemoryError`, a fork bomb hits
+`BlockingIOError`, and reading `.env` raises `PermissionError`.
 
-13 tables with org-scoped RLS. See `migrations/001_initial_schema.sql`.
+One sharp edge worth knowing: `RLIMIT_NPROC` must not be zero. Root
+ignores it, so the owner path works, but an unprivileged child cannot
+start OpenBLAS threads and `import pandas` dies before any user code
+runs.
 
-## Security
+### One persistent TTS socket, not one request per sentence
 
-- Phone calls restricted to `OWNER_PHONE_E164` only (`call_owner` tool)
-- OAuth tokens encrypted with Fernet
-- Row Level Security on all tables
-- JWT auth on all API routes
-- No secrets in frontend bundle
+The first version called the speech API once per sentence. Every call
+paid a fresh TLS handshake, and every sentence was synthesised
+separately with its own intonation curve, so the result sounded like
+clips stitched together.
 
-## Deployment
+Now a single WebSocket stays open and LLM text is streamed into it.
+Measured on the server: first audio at 0.20s, consistent across turns on
+a reused socket.
 
-Docker Compose with Caddy reverse proxy. `docker-compose up -d` on Hetzner VPS.
-Set `DOMAIN=yourdomain.com` for automatic HTTPS via Caddy.
+Turn-taking keys off Deepgram's `speech_final`, not `is_final`.
+`is_final` only means a chunk will not be revised — it fires mid-sentence,
+and the assistant ends up answering fragments.
+
+### Model differences live in one function
+
+`ai_brain.completion_params()` is the only place that knows how model
+families differ. The gpt-6 family renamed `max_tokens` to
+`max_completion_tokens` and refuses function tools on
+`/v1/chat/completions` unless reasoning is switched off. Scattering that
+across the five call sites would mean a new family breaks the app in five
+places.
+
+### Limits are enforced in code, never in a prompt
+
+A prompt is the first thing a visitor attacks. So:
+
+- Outbound calls can only reach `OWNER_PHONE_E164`, validated as E.164 in
+  backend code. The model never supplies the destination.
+- Guest passes carry message and call quotas checked server-side, plus a
+  global daily ceiling.
+- The guest registry is a separate object. There is no path from a guest
+  request to the owner's tools.
+- Guest email is two fixed templates. The model can choose the recipient
+  (their own address) or the body (a message to the owner), never both —
+  which is what would make it a spam relay.
+
+---
+
+## Where the seams are
+
+Honest notes for anyone reading the code:
+
+- **`routes/voice.py` is the biggest file** and holds two handlers: the
+  browser socket and the Twilio media socket. They share a shape but not
+  code, because the encodings differ (PCM at 24kHz versus mulaw at 8kHz
+  in 20ms frames). Merging them would help; it has not been done.
+- **Tool modules self-register on import.** `main.py` imports them for
+  the side effect. Convenient, but it means import order matters.
+- **Documents are stored on local disk**, not object storage. Fine for a
+  single VPS; it would need changing to run more than one instance.
+- **The deploy is file copy over SSH**, not CI. `deploy/` holds the
+  systemd units and nginx config for reference.
+
+---
+
+## Database
+
+Postgres via Supabase, row-level security on. The backend uses the
+service role and does its own authorisation.
+
+| Table | Holds |
+|---|---|
+| `organizations`, `users` | tenancy and identity |
+| `agents` | per-agent prompt, models, voice |
+| `conversations`, `messages` | chat and call transcripts |
+| `memories`, `weekly_summaries` | long-term recall |
+| `documents` | uploaded and generated files |
+| `integrations` | encrypted OAuth tokens |
+| `phone_numbers`, `call_logs` | telephony |
+| `guest_passes`, `guest_events` | access codes and their usage |
+| `usage_events`, `tool_executions` | cost and audit |
+| `app_settings` | runtime config that overrides env |
+
+Schema lives in `migrations/`, numbered. `all.sql` is every migration
+combined and is safe to re-run.

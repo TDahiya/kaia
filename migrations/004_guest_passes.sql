@@ -40,7 +40,9 @@ create index if not exists guest_events_created_idx on guest_events(created_at);
 alter table guest_passes enable row level security;
 alter table guest_events enable row level security;
 
+drop policy if exists guest_passes_service_role on guest_passes;
 create policy guest_passes_service_role on guest_passes
     for all using (auth.role() = 'service_role');
+drop policy if exists guest_events_service_role on guest_events;
 create policy guest_events_service_role on guest_events
     for all using (auth.role() = 'service_role');

@@ -6,7 +6,7 @@ create extension if not exists "uuid-ossp";
 create extension if not exists "pgcrypto";
 
 -- Organizations (future multi-tenant support)
-create table organizations (
+create table if not exists organizations (
     id uuid primary key default uuid_generate_v4(),
     name text not null,
     created_at timestamptz not null default now(),
@@ -14,7 +14,7 @@ create table organizations (
 );
 
 -- Users
-create table users (
+create table if not exists users (
     id uuid primary key references auth.users(id) on delete cascade,
     org_id uuid references organizations(id) on delete set null,
     email text not null,
@@ -25,7 +25,7 @@ create table users (
 );
 
 -- Agents
-create table agents (
+create table if not exists agents (
     id uuid primary key default uuid_generate_v4(),
     org_id uuid not null references organizations(id) on delete cascade,
     name text not null,
@@ -44,7 +44,7 @@ create table agents (
 );
 
 -- Integration connections (Google OAuth etc.)
-create table integrations (
+create table if not exists integrations (
     id uuid primary key default uuid_generate_v4(),
     org_id uuid not null references organizations(id) on delete cascade,
     user_id uuid not null references users(id) on delete cascade,
@@ -60,7 +60,7 @@ create table integrations (
 );
 
 -- Conversations
-create table conversations (
+create table if not exists conversations (
     id uuid primary key default uuid_generate_v4(),
     org_id uuid not null references organizations(id) on delete cascade,
     user_id uuid not null references users(id) on delete cascade,
@@ -73,7 +73,7 @@ create table conversations (
 );
 
 -- Messages
-create table messages (
+create table if not exists messages (
     id uuid primary key default uuid_generate_v4(),
     conversation_id uuid not null references conversations(id) on delete cascade,
     role text not null check (role in ('user', 'assistant', 'system', 'tool')),
@@ -88,7 +88,7 @@ create table messages (
 );
 
 -- Persistent memories
-create table memories (
+create table if not exists memories (
     id uuid primary key default uuid_generate_v4(),
     org_id uuid not null references organizations(id) on delete cascade,
     user_id uuid not null references users(id) on delete cascade,
@@ -103,7 +103,7 @@ create table memories (
 );
 
 -- Weekly summaries
-create table weekly_summaries (
+create table if not exists weekly_summaries (
     id uuid primary key default uuid_generate_v4(),
     org_id uuid not null references organizations(id) on delete cascade,
     user_id uuid not null references users(id) on delete cascade,
@@ -117,7 +117,7 @@ create table weekly_summaries (
 );
 
 -- Phone numbers
-create table phone_numbers (
+create table if not exists phone_numbers (
     id uuid primary key default uuid_generate_v4(),
     org_id uuid not null references organizations(id) on delete cascade,
     provider text not null default 'telnyx',
@@ -129,7 +129,7 @@ create table phone_numbers (
 );
 
 -- Call logs
-create table call_logs (
+create table if not exists call_logs (
     id uuid primary key default uuid_generate_v4(),
     org_id uuid not null references organizations(id) on delete cascade,
     conversation_id uuid references conversations(id) on delete set null,
@@ -147,7 +147,7 @@ create table call_logs (
 );
 
 -- Tool execution log
-create table tool_executions (
+create table if not exists tool_executions (
     id uuid primary key default uuid_generate_v4(),
     org_id uuid not null references organizations(id) on delete cascade,
     conversation_id uuid references conversations(id) on delete set null,
@@ -160,7 +160,7 @@ create table tool_executions (
 );
 
 -- Usage tracking
-create table usage_events (
+create table if not exists usage_events (
     id uuid primary key default uuid_generate_v4(),
     org_id uuid not null references organizations(id) on delete cascade,
     user_id uuid references users(id) on delete set null,
@@ -175,7 +175,7 @@ create table usage_events (
 );
 
 -- CRM sync state
-create table crm_sync_state (
+create table if not exists crm_sync_state (
     id uuid primary key default uuid_generate_v4(),
     org_id uuid not null references organizations(id) on delete cascade,
     spreadsheet_id text not null,
@@ -186,15 +186,15 @@ create table crm_sync_state (
 );
 
 -- Indexes
-create index idx_messages_conversation on messages(conversation_id, created_at);
-create index idx_conversations_user on conversations(user_id, started_at desc);
-create index idx_conversations_org on conversations(org_id);
-create index idx_memories_user on memories(user_id, is_active, category);
-create index idx_memories_org on memories(org_id);
-create index idx_usage_events_org_date on usage_events(org_id, created_at);
-create index idx_usage_events_provider on usage_events(provider, created_at);
-create index idx_tool_executions_conv on tool_executions(conversation_id);
-create index idx_call_logs_org on call_logs(org_id, started_at desc);
+create index if not exists idx_messages_conversation on messages(conversation_id, created_at);
+create index if not exists idx_conversations_user on conversations(user_id, started_at desc);
+create index if not exists idx_conversations_org on conversations(org_id);
+create index if not exists idx_memories_user on memories(user_id, is_active, category);
+create index if not exists idx_memories_org on memories(org_id);
+create index if not exists idx_usage_events_org_date on usage_events(org_id, created_at);
+create index if not exists idx_usage_events_provider on usage_events(provider, created_at);
+create index if not exists idx_tool_executions_conv on tool_executions(conversation_id);
+create index if not exists idx_call_logs_org on call_logs(org_id, started_at desc);
 
 -- Row Level Security
 alter table organizations enable row level security;

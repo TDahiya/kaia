@@ -8,5 +8,6 @@ create table if not exists app_settings (
 alter table app_settings enable row level security;
 
 -- Service-role only. The backend validates every write; no client writes directly.
+drop policy if exists app_settings_service_role on app_settings;
 create policy app_settings_service_role on app_settings
     for all using (auth.role() = 'service_role');
