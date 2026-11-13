@@ -1,5 +1,8 @@
 -- Every migration, in order. Paste this whole file into the Supabase
 -- SQL editor once and you are done. Safe to run more than once.
+--
+-- 005_transfer_owner.sql is deliberately excluded: it is a one-off
+-- ownership transfer, not part of setting up a new install.
 
 -- ====================================================================
 -- 001_initial_schema.sql
