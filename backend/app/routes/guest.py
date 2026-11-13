@@ -130,7 +130,7 @@ async def redeem(body: RedeemBody):
         raise HTTPException(403, err)
     return {
         "token": passes.issue_session(pass_row["id"]),
-        "label": pass_row["label"],
+        **passes.describe(pass_row),
         "remaining": passes.remaining(pass_row),
     }
 
@@ -138,7 +138,7 @@ async def redeem(body: RedeemBody):
 @router.get("/me")
 async def me(authorization: str | None = Header(None)):
     p = _pass_from_header(authorization)
-    return {"label": p["label"], "remaining": passes.remaining(p)}
+    return {**passes.describe(p), "remaining": passes.remaining(p)}
 
 
 @router.post("/signup-pass")
@@ -170,7 +170,7 @@ async def signup_pass(user: dict = Depends(get_current_user)):
 
     return {
         "token": passes.issue_session(row["id"]),
-        "label": email,
+        **passes.describe(row),
         "remaining": passes.remaining(row),
     }
 

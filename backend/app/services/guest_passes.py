@@ -64,6 +64,22 @@ def list_passes() -> list[dict]:
     return res.data or []
 
 
+SIGNUP_PREFIX = "signup:"
+
+
+def describe(pass_row: dict) -> dict:
+    """How a pass should be named in the UI.
+
+    Auto-issued passes are stored as "signup:<email>" so they can be looked
+    up by email, but that prefix is plumbing and should never reach a
+    visitor's screen.
+    """
+    raw = pass_row.get("label") or ""
+    if raw.startswith(SIGNUP_PREFIX):
+        return {"label": raw[len(SIGNUP_PREFIX):], "via": "signup"}
+    return {"label": raw, "via": "code"}
+
+
 def find_by_label(label: str) -> dict | None:
     res = get_supabase().table("guest_passes").select("*").eq("label", label).execute()
     return res.data[0] if res.data else None

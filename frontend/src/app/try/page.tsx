@@ -56,6 +56,7 @@ export default function GuestPortal() {
   const router = useRouter();
   const [token, setToken] = useState<string | null>(null);
   const [label, setLabel] = useState("");
+  const [via, setVia] = useState("code");
   const [remaining, setRemaining] = useState<any>(null);
 
 
@@ -139,7 +140,7 @@ export default function GuestPortal() {
     }
     fetch(`${BACKEND}/api/guest/me`, { headers: { Authorization: `Bearer ${saved}` } })
       .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then((d) => { setToken(saved); setLabel(d.label); setRemaining(d.remaining); })
+      .then((d) => { setToken(saved); setLabel(d.label); setVia(d.via || "code"); setRemaining(d.remaining); })
       .catch(() => {
         localStorage.removeItem(STORE);
         router.replace("/");
@@ -308,7 +309,11 @@ export default function GuestPortal() {
         <div className="flex items-center gap-2.5">
           <KaiaMark size={22} />
           <span className="text-[15px] font-medium tracking-[0.08em] lowercase text-text">kaia</span>
-          {label && <span className="hidden sm:inline text-[12px] text-text-4 ml-2">for {label}</span>}
+          {label && (
+            <span className="hidden sm:inline text-[12px] text-text-4 ml-2">
+              {via === "signup" ? `Signed in as ${label}` : `for ${label}`}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-4">
           {remaining && (

@@ -35,7 +35,7 @@ try {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" data-theme="dark" className={`${bricolage.variable} ${jetbrains.variable} h-full`}>
+    <html lang="en" data-theme="light" className={`${bricolage.variable} ${jetbrains.variable} h-full`}>
       <head>
         {/* Written as plain tags rather than via the metadata API: an
             openGraph block there forces runtime metadata on /agents/[id],
@@ -52,7 +52,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <meta name="twitter:title" content="Kaia — your personal AI assistant" />
         <meta name="twitter:description" content={DESCRIPTION} />
         <meta name="twitter:image" content={`${SITE}/og.png`} />
-        <meta name="theme-color" content="#130303" />
+        <meta name="theme-color" content="#FDF7F4" />
         <script dangerouslySetInnerHTML={{ __html: noFlash }} />
       </head>
       <body className="min-h-full">

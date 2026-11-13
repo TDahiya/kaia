@@ -5,14 +5,14 @@ import { createContext, useContext, useEffect, useState, ReactNode } from "react
 type Theme = "dark" | "light";
 
 const ThemeContext = createContext<{ theme: Theme; toggle: () => void }>({
-  theme: "dark",
+  theme: "light",
   toggle: () => {},
 });
 
 export const useTheme = () => useContext(ThemeContext);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>("dark");
+  const [theme, setTheme] = useState<Theme>("light");
 
   useEffect(() => {
     const stored = localStorage.getItem("kaia-theme") as Theme | null;

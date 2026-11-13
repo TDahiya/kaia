@@ -8,7 +8,6 @@
    Type scale ratio 1.25 from a 16px base.
    ═══════════════════════════════════════════════════════════ */
 
-:root,
 :root[data-theme="dark"] {
   /* ── CANVAS — Coffee Bean. The page floor. Nothing else uses it. */
   --bg: #130303;
@@ -54,6 +53,7 @@
   --scrim: rgba(0, 0, 0, 0.72);
 }
 
+:root,
 :root[data-theme="light"] {
   --bg: #FDF7F4;
   --surface: #FFFFFF;
@@ -126,8 +126,8 @@
 /* ── Base ─────────────────────────────────────────────── */
 * { border-color: var(--border); }
 
-html { color-scheme: dark; }
-html[data-theme="light"] { color-scheme: light; }
+html { color-scheme: light; }
+html[data-theme="dark"] { color-scheme: dark; }
 
 body {
   background: var(--bg);
