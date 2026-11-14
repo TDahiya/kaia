@@ -165,7 +165,7 @@ export default function PassesPage() {
               placeholder="Who is it for? e.g. Amazon — Sarah" />
             <Field value={form.note} onChange={(v) => setForm({ ...form, note: v })}
               placeholder="Note to yourself (optional)" />
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {([
                 ["Days", "days", 1, 30],
                 ["Messages", "max_messages", 1, 200],

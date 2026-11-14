@@ -91,11 +91,15 @@ export default function FrontDoor() {
               onKeyDown={(e) => e.key === "Enter" && enter()}
               placeholder="AMZN-4K2P"
               autoComplete="off"
-              className="flex-1 bg-control border border-[var(--control-border)] rounded-xl px-4 py-3 text-[15px] font-mono tracking-widest text-center text-text uppercase"
+              /* min-w-0 is the whole fix for the button falling off a phone:
+                 a flex item will not shrink below its content, and a mono
+                 letter-spaced placeholder is wider than a 375px screen has
+                 left over once the button has its share. */
+              className="flex-1 min-w-0 bg-control border border-[var(--control-border)] rounded-xl px-4 py-3 text-[15px] font-mono tracking-widest text-center text-text uppercase"
             />
             <button onClick={enter} disabled={checking || !code.trim()}
               aria-label="Enter"
-              className="px-5 rounded-xl text-sm font-medium press disabled:opacity-40 transition-opacity"
+              className="flex-shrink-0 px-5 rounded-xl text-sm font-medium press disabled:opacity-40 transition-opacity flex items-center justify-center"
               style={{ background: "var(--accent)", color: "var(--on-accent)" }}>
               {checking ? "…" : <ArrowRight size={16} />}
             </button>

@@ -33,7 +33,10 @@ export function PageHeader({
   action,
 }: { title: string; subtitle?: string; action?: ReactNode }) {
   return (
-    <div className="flex items-start justify-between gap-4 mb-8 pl-12 md:pl-0 rise">
+    /* The menu button is fixed at the top-left on mobile. Reserving a column
+       of left padding for it squeezed every title into half the screen; the
+       title drops below it instead, full width. */
+    <div className="flex items-start justify-between gap-3 mb-8 pt-10 md:pt-0 rise">
       <div>
         <h1 className="text-2xl font-semibold tracking-[-0.02em] text-text">{title}</h1>
         {subtitle && <p className="text-sm text-text-3 mt-1">{subtitle}</p>}
@@ -156,5 +159,5 @@ export function Spinner({ size = 16 }: { size?: number }) {
 
 /* Page shell — every page uses this so gutters and max-width never drift. */
 export function Page({ children }: { children: ReactNode }) {
-  return <div className="px-6 md:px-8 py-8 max-w-[1040px] mx-auto">{children}</div>;
+  return <div className="px-4 md:px-8 py-6 md:py-8 max-w-[1040px] mx-auto">{children}</div>;
 }

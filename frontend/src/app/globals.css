@@ -105,15 +105,14 @@
   --color-warn: var(--warn);
   --color-bad: var(--bad);
 
-  /* 8px spacing scale. 4px exists only for icon-to-label gaps. */
-  --spacing-half: 4px;
-  --spacing-1: 8px;
-  --spacing-2: 16px;
-  --spacing-3: 24px;
-  --spacing-4: 32px;
-  --spacing-5: 48px;
-  --spacing-6: 64px;
-  --spacing-7: 96px;
+  /* Spacing is Tailwind's own 4px base, deliberately.
+     This used to redefine steps 1-7 onto an 8px grid, which doubled or
+     tripled every utility in the app: px-6 came out at 64px, so a phone
+     lost a third of its width to page padding alone. Worse, it only
+     redefined 1-7 — step 8 and up fell back to the 4px base, so mb-7 was
+     96px while mb-8 was 32px and the scale ran backwards mid-way.
+     The even steps (p-2, p-4, p-6, p-8) already land on 8px multiples,
+     which is what the 8px grid was asking for. */
 
   --font-sans: var(--font-brand), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-mono-jb), ui-monospace, monospace;
