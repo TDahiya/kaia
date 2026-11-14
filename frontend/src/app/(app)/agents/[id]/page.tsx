@@ -13,15 +13,31 @@ const VOICES = [
 ];
 const LANGS = ["en", "es", "fr", "de", "it", "pt", "ja", "zh"];
 
+/* Read-only because it is read-only: these come from the server's own
+   configuration, so showing them in an input box would promise an edit that
+   never lands. */
+function LiveValue({ value }: { value?: string | number }) {
+  return (
+    <div className="w-full bg-control/60 border border-[var(--control-border)] rounded-lg px-3 py-2 font-mono text-xs text-text-2">
+      {value ?? "—"}
+    </div>
+  );
+}
+
 export default function AgentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [agent, setAgent] = useState<any>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  // Model choice is server configuration, not per-agent data. This card used
+  // to edit columns on the agent row that nothing ever read, so it could sit
+  // showing gpt-4o while every request went somewhere else entirely.
+  const [live, setLive] = useState<any>(null);
 
   useEffect(() => {
     api.getAgent(id).then((d) => setAgent(d.agent)).catch(() => router.push("/agents"));
+    api.getSystemStatus().then(setLive).catch(() => {});
   }, [id, router]);
 
   const save = async () => {
@@ -53,7 +69,7 @@ export default function AgentDetailPage() {
 
   return (
     <Page>
-      <div className="flex items-center justify-between mb-8 pl-12 md:pl-0">
+      <div className="flex items-center justify-between gap-3 mb-8 pt-10 md:pt-0">
         <div className="flex items-center gap-3 min-w-0">
           <button onClick={() => router.push("/agents")} aria-label="Back"
             className="p-2 rounded-lg text-text-3 hover:text-text hover:bg-surface-hover transition-colors">
@@ -84,20 +100,21 @@ export default function AgentDetailPage() {
         </Card>
 
         <Card className="space-y-4">
-          <h3 className="text-sm font-medium text-text">Models</h3>
+          <div className="flex items-baseline justify-between gap-3">
+            <h3 className="text-sm font-medium text-text">Models</h3>
+            <span className="text-[11px] text-text-4">live on the server</span>
+          </div>
           <Row label="Fast — routine tasks">
-            <input value={agent.model_fast || ""} onChange={(e) => set("model_fast", e.target.value)} className={`${inputCls} font-mono text-xs`} />
+            <LiveValue value={live?.models?.fast} />
           </Row>
           <Row label="Standard — complex tasks">
-            <input value={agent.model_standard || ""} onChange={(e) => set("model_standard", e.target.value)} className={`${inputCls} font-mono text-xs`} />
+            <LiveValue value={live?.models?.standard} />
           </Row>
           <Row label="Premium — hard reasoning">
-            <input value={agent.model_premium || ""} onChange={(e) => set("model_premium", e.target.value)} className={`${inputCls} font-mono text-xs`} />
+            <LiveValue value={live?.models?.premium} />
           </Row>
           <Row label="Max tool calls per turn">
-            <input type="number" value={agent.max_tool_calls_per_turn ?? 15}
-              onChange={(e) => set("max_tool_calls_per_turn", parseInt(e.target.value) || 15)}
-              className={`${inputCls} tnum`} />
+            <LiveValue value={live?.limits?.max_tool_calls_per_turn} />
           </Row>
         </Card>
 

@@ -13,9 +13,11 @@ class AgentCreate(BaseModel):
     description: str = ""
     system_prompt: str = ""
     personality: str = ""
-    model_fast: str = "claude-haiku-5-5"
-    model_standard: str = "claude-sonnet-5-5"
-    model_premium: str = "claude-opus-5-5"
+    # Carried on the row for history only. The models actually used come from
+    # settings, the same three for every agent — see ai_brain.get_model_id().
+    model_fast: str = ""
+    model_standard: str = ""
+    model_premium: str = ""
     voice_id: str = "aura-2-theia-en"
     language: str = "en"
     max_tool_calls_per_turn: int = 15

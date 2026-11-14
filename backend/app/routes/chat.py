@@ -328,7 +328,7 @@ async def send_message(req: ChatRequest, user: dict = Depends(require_owner)):
     # Load agent prompt
     system_prompt = DEFAULT_SYSTEM_PROMPT
     if agent_id:
-        agent = db.table("agents").select("system_prompt, model_fast, model_standard, model_premium").eq("id", agent_id).single().execute()
+        agent = db.table("agents").select("system_prompt").eq("id", agent_id).single().execute()
         if agent.data and agent.data.get("system_prompt"):
             system_prompt = agent.data["system_prompt"]
 

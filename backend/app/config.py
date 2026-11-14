@@ -8,9 +8,11 @@ class Settings(BaseSettings):
     supabase_service_role_key: str = ""
 
     openai_api_key: str = ""
-    openai_model_fast: str = "gpt-4o-mini"
-    openai_model_standard: str = "gpt-4o"
-    openai_model_premium: str = "gpt-4.1"
+    # These three are the only place model choice lives. Nothing else in the
+    # app may hardcode a model id — see ai_brain.get_model_id().
+    openai_model_fast: str = "gpt-6-luna"
+    openai_model_standard: str = "gpt-6-astra"
+    openai_model_premium: str = "gpt-6-sol"
 
     deepgram_api_key: str = ""
 
