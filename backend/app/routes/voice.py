@@ -37,6 +37,33 @@ TTS_RATE = 24000
 VOICE_TIER = ModelTier.FAST
 VOICE_MAX_TOKENS = 600
 
+# Barge-in thresholds. Short enough that cutting in feels instant, long
+# enough that a cough or an echo of Kaia's own voice does not count.
+BARGE_IN_MIN_CHARS = 8
+BARGE_IN_GRACE_S = 0.7
+
+
+def should_barge_in(text: str, elapsed_s: float, last_user_text: str) -> bool:
+    """Is this transcript the user cutting in, or is it noise?
+
+    Called on interim results, not on speech_final: waiting for the end of
+    the user's sentence means talking over the whole of it, which is what a
+    broken barge-in sounds like.
+
+    Two things get filtered out. Deepgram keeps revising the utterance that
+    *asked* the question, and those revisions arrive while Kaia is answering
+    it — an echo of the question, not an interruption. And on speakers the
+    mic hears Kaia herself; browser echo cancellation handles most of that,
+    the grace window covers the rest.
+    """
+    text = text.strip()
+    if len(text) < BARGE_IN_MIN_CHARS:
+        return False
+    if elapsed_s < BARGE_IN_GRACE_S:
+        return False
+    return not last_user_text.strip().startswith(text[:BARGE_IN_MIN_CHARS])
+
+
 # Phone leg: Twilio media streams are 8kHz mulaw in 20ms frames.
 PHONE_TTS_WS_URL = (
     f"wss://api.deepgram.com/v1/speak"
@@ -158,6 +185,8 @@ Calendar, email, CRM, weather, maps, memory. Use them — don't describe them.""
 
     messages_history: list[dict] = []
     is_speaking = False
+    speaking_since = 0.0
+    last_user_text = ""
     current_tts_task: asyncio.Task | None = None
 
     # One TTS socket for the whole session. Reconnecting per sentence was
@@ -184,12 +213,45 @@ Calendar, email, CRM, weather, maps, memory. Use them — don't describe them.""
                 pass
             tts_sock = None
 
-    async def _stream_and_speak(messages, prompt, tools_defs, tool_exec, first_audio=None):
+    async def _interrupt():
+        """Stop mid-answer because the user started talking.
+
+        Three things are holding speech and all three have to stop, or the
+        interruption only looks like it worked: the task still writing text,
+        the Deepgram socket holding audio already synthesised, and the frames
+        the browser has queued on its playback timeline. Miss that last one
+        and Kaia talks over the user for several more seconds.
+
+        The socket is dropped rather than sent a Clear: cancelling the task
+        kills the pump reading it, and a fresh socket is the only way to be
+        certain nothing synthesised before the interruption arrives after it.
+        One TLS handshake, paid only when someone actually cuts in.
+        """
+        nonlocal current_tts_task, is_speaking
+        if not is_speaking:
+            return
+        is_speaking = False
+        task, current_tts_task = current_tts_task, None
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        await _drop_tts_socket()
+        try:
+            await ws.send_json({"type": "interrupt"})
+        except Exception:
+            pass
+
+    async def _stream_and_speak(messages, prompt, tools_defs, tool_exec, first_audio=None, out=None):
         """Stream LLM text straight into a live TTS socket. Returns reply text.
 
         Text deltas are pushed as they arrive, so speech starts before the
         model has finished writing. `first_audio` is set on the first audio
         frame so the backchannel watchdog knows it is no longer needed.
+        `out` collects those deltas for the caller, which is the only way to
+        recover what was actually said when this gets cancelled mid-sentence.
         """
         client = get_async_openai()
         model = get_model_id(VOICE_TIER)
@@ -200,7 +262,7 @@ Calendar, email, CRM, weather, maps, memory. Use them — don't describe them.""
             if isinstance(m.get("content"), str):
                 oai_msgs.append({"role": m["role"], "content": m["content"]})
 
-        reply_parts: list[str] = []
+        reply_parts: list[str] = out if out is not None else []
 
         try:
             sock = await _tts_socket()
@@ -346,12 +408,22 @@ Calendar, email, CRM, weather, maps, memory. Use them — don't describe them.""
 
     async def process_transcript(transcript: str, is_final: bool):
         nonlocal messages_history, current_tts_task, is_new_conversation
+        nonlocal is_speaking, speaking_since, last_user_text
 
-        if not is_final or not transcript.strip():
-            if transcript.strip():
-                await ws.send_json({"type": "transcript_interim", "text": transcript})
+        text = transcript.strip()
+
+        if is_speaking:
+            elapsed = asyncio.get_event_loop().time() - speaking_since
+            if should_barge_in(text, elapsed, last_user_text):
+                logger.info("voice: barge-in after %.1fs on '%s'", elapsed, text[:60])
+                await _interrupt()
+
+        if not is_final or not text:
+            if text:
+                await ws.send_json({"type": "transcript_interim", "text": text})
             return
 
+        last_user_text = text
         await ws.send_json({"type": "transcript_final", "text": transcript})
 
         if is_new_conversation:
@@ -400,14 +472,29 @@ Calendar, email, CRM, weather, maps, memory. Use them — don't describe them.""
         bc_task = asyncio.create_task(_backchannel())
 
         async def _run():
+            nonlocal is_speaking
+            said: list[str] = []
             try:
                 reply, model_used = await _stream_and_speak(
                     messages_history, full_prompt,
                     registry.list_definitions(), tool_executor,
-                    first_audio=first_audio,
+                    first_audio=first_audio, out=said,
                 )
+            except asyncio.CancelledError:
+                # Cut off mid-sentence. Keep the half she got out, or the next
+                # turn answers as though she had never spoken — and she repeats
+                # herself, which is exactly what the interruption was avoiding.
+                partial = "".join(said).strip()
+                if partial:
+                    messages_history.append({"role": "assistant", "content": partial})
+                    db.table("messages").insert({
+                        "conversation_id": conversation_id,
+                        "role": "assistant", "content": partial + " —",
+                    }).execute()
+                raise
             finally:
                 bc_task.cancel()
+                is_speaking = False
             messages_history.append({"role": "assistant", "content": reply})
             db.table("messages").insert({
                 "conversation_id": conversation_id,
@@ -416,6 +503,8 @@ Calendar, email, CRM, weather, maps, memory. Use them — don't describe them.""
             }).execute()
             await ws.send_json({"type": "response_text", "text": reply, "model": model_used})
 
+        is_speaking = True
+        speaking_since = asyncio.get_event_loop().time()
         current_tts_task = asyncio.create_task(_run())
 
     # Main loop: receive audio from client, forward to Deepgram

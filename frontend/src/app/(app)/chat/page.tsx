@@ -274,7 +274,18 @@ export default function ChatPage() {
 
   const startMic = async (ws: WebSocket) => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, sampleRate: 16000 } });
+      // Echo cancellation is load-bearing, not polish: on speakers the mic
+      // hears Kaia, Deepgram transcribes her, and she interrupts herself in a
+      // loop. The browser's AEC subtracts what is being played back.
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
       const rec = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
       rec.ondataavailable = (e) => {
         if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) ws.send(e.data);
@@ -345,13 +356,17 @@ export default function ChatPage() {
           });
           break;
         case "audio": enqueue(d.data, d.rate || 24000); break;
+        // She was cut off. Frames already scheduled on the playback timeline
+        // would otherwise keep playing for seconds after the server stopped,
+        // which reads as the interruption not having worked.
+        case "interrupt": stopAudio(); setVoiceStatus("Listening"); break;
         case "audio_done": setVoiceStatus("Listening"); break;
         case "error": setVoiceStatus(d.message); break;
       }
     };
     ws.onclose = () => { setListening(false); setVoiceStatus(""); };
     setListening(true);
-  }, [user, conversationId, enqueue]);
+  }, [user, conversationId, enqueue, stopAudio]);
 
   const stopVoice = useCallback(() => {
     wsRef.current?.close();
